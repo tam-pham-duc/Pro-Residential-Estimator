@@ -6,7 +6,8 @@ import { evaluateMath, evaluateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals
 import { Item, TakeoffItem, HistoryRecord, Job } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
-  ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X
+  ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
+  Undo2, Redo2
 } from 'lucide-react';
 
 function Clock() {
@@ -31,6 +32,7 @@ export default function EstimatorApp() {
   const [catalog, setCatalog] = useState<Item[]>([]);
   const [takeoffData, setTakeoffData] = useState<Record<string, TakeoffItem>>({});
   const [actionHistory, setActionHistory] = useState<HistoryRecord[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(0);
   const [collapsedState, setCollapsedState] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [projectName, setProjectName] = useState("");
@@ -94,10 +96,45 @@ export default function EstimatorApp() {
       clientName: newClient
     };
     setActionHistory(prev => {
-      const newHistory = [snapshot, ...prev];
+      const pastHistory = prev.slice(historyIndex);
+      const newHistory = [snapshot, ...pastHistory];
       if (newHistory.length > 50) newHistory.pop();
       return newHistory;
     });
+    setHistoryIndex(0);
+  };
+
+  const canUndo = historyIndex < actionHistory.length - 1;
+  const canRedo = historyIndex > 0;
+
+  const undo = () => {
+    if (canUndo) {
+      const newIndex = historyIndex + 1;
+      const record = actionHistory[newIndex];
+      setTakeoffData(record.dataState);
+      if (record.catalogState) {
+        setCatalog(record.catalogState);
+        localStorage.setItem('userItemCatalog', JSON.stringify(record.catalogState));
+      }
+      setProjectName(record.projectName);
+      setClientName(record.clientName);
+      setHistoryIndex(newIndex);
+    }
+  };
+
+  const redo = () => {
+    if (canRedo) {
+      const newIndex = historyIndex - 1;
+      const record = actionHistory[newIndex];
+      setTakeoffData(record.dataState);
+      if (record.catalogState) {
+        setCatalog(record.catalogState);
+        localStorage.setItem('userItemCatalog', JSON.stringify(record.catalogState));
+      }
+      setProjectName(record.projectName);
+      setClientName(record.clientName);
+      setHistoryIndex(newIndex);
+    }
   };
 
   const updateTakeoffData = (itemId: string, field: keyof TakeoffItem, value: any, instruction: string, itemName: string) => {
@@ -269,6 +306,7 @@ export default function EstimatorApp() {
       setCurrentJobId("JOB-" + Date.now());
       setTakeoffData({});
       setActionHistory([]);
+      setHistoryIndex(0);
       setProjectName("");
       setClientName("");
       return;
@@ -278,6 +316,7 @@ export default function EstimatorApp() {
       setCurrentJobId(selectedId);
       setTakeoffData(jobData.takeoffData || {});
       setActionHistory(jobData.history || []);
+      setHistoryIndex(0);
       setProjectName(jobData.projectName || "");
       setClientName(jobData.clientName || "");
       setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName), 0);
@@ -361,6 +400,7 @@ export default function EstimatorApp() {
           setCurrentJobId(importedData.jobId || "JOB-" + Date.now());
           setTakeoffData(importedData.takeoffData);
           setActionHistory(importedData.historyLog || []);
+          setHistoryIndex(0);
           if (importedData.catalog) {
             setCatalog(importedData.catalog);
             localStorage.setItem('userItemCatalog', JSON.stringify(importedData.catalog));
@@ -517,7 +557,7 @@ export default function EstimatorApp() {
       }
       setProjectName(record.projectName);
       setClientName(record.clientName);
-      setTimeout(() => recordHistory(`Restored back to: ${record.action}`, record.dataState, record.catalogState, record.projectName, record.clientName), 0);
+      setHistoryIndex(index);
       setHistoryModalOpen(false);
     }
   };
@@ -606,6 +646,22 @@ export default function EstimatorApp() {
             </div>
           </div>
           <div className="flex items-center gap-2 w-1/4 justify-end text-sm">
+            <button 
+              onClick={undo} 
+              disabled={!canUndo}
+              className={`px-3 py-2 rounded font-bold flex items-center gap-1 transition ${canUndo ? 'text-slate-700 bg-slate-200 hover:bg-slate-300' : 'text-slate-400 bg-slate-100 cursor-not-allowed'}`}
+              title="Undo"
+            >
+              <Undo2 size={16} />
+            </button>
+            <button 
+              onClick={redo} 
+              disabled={!canRedo}
+              className={`px-3 py-2 rounded font-bold flex items-center gap-1 transition ${canRedo ? 'text-slate-700 bg-slate-200 hover:bg-slate-300' : 'text-slate-400 bg-slate-100 cursor-not-allowed'}`}
+              title="Redo"
+            >
+              <Redo2 size={16} />
+            </button>
             <button onClick={() => setHistoryModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
               <History size={16} /> History
             </button>
@@ -1142,13 +1198,16 @@ export default function EstimatorApp() {
                     <tr><td colSpan={3} className="px-4 py-6 text-center text-slate-500 font-medium">No history recorded yet.</td></tr>
                   ) : (
                     actionHistory.map((record, index) => (
-                      <tr key={index} className="hover:bg-blue-50 transition-colors">
+                      <tr key={index} className={`${index === historyIndex ? 'bg-emerald-100 hover:bg-emerald-200' : 'hover:bg-blue-50'} transition-colors`}>
                         <td className="px-4 py-3 text-xs text-slate-500">{new Date(record.timestamp).toLocaleTimeString()}</td>
-                        <td className="px-4 py-3 font-semibold text-slate-800">{record.action}</td>
+                        <td className="px-4 py-3 font-semibold text-slate-800">
+                          {record.action} {index === historyIndex && <span className="ml-2 text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full">CURRENT</span>}
+                        </td>
                         <td className="px-4 py-3 text-right">
                           <button 
                             onClick={() => restoreHistory(index)} 
-                            className="text-blue-700 font-bold text-xs bg-blue-100 hover:bg-blue-200 px-3 py-1.5 rounded transition shadow-sm"
+                            disabled={index === historyIndex}
+                            className={`font-bold text-xs px-3 py-1.5 rounded transition shadow-sm ${index === historyIndex ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'text-blue-700 bg-blue-100 hover:bg-blue-200'}`}
                           >
                             Restore
                           </button>
