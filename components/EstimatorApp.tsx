@@ -66,6 +66,7 @@ export default function EstimatorApp() {
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const formulaInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const savedCatalog = localStorage.getItem('userItemCatalog');
@@ -465,6 +466,22 @@ export default function EstimatorApp() {
       return newData;
     });
     setQtyPanelOpen(false);
+  };
+
+  const insertText = (text: string) => {
+    const input = formulaInputRef.current;
+    if (input) {
+      const start = input.selectionStart || 0;
+      const end = input.selectionEnd || 0;
+      const newFormula = customFormula.substring(0, start) + text + customFormula.substring(end);
+      setCustomFormula(newFormula);
+      setTimeout(() => {
+        input.focus();
+        input.setSelectionRange(start + text.length, start + text.length);
+      }, 0);
+    } else {
+      setCustomFormula(prev => prev + text);
+    }
   };
 
   const openItemModal = (mode: 'add' | 'edit', itemId: string | null = null) => {
@@ -985,10 +1002,45 @@ export default function EstimatorApp() {
               <div className="space-y-4">
                 <input 
                   type="text" 
+                  ref={formulaInputRef}
                   value={customFormula}
                   onChange={(e) => setCustomFormula(e.target.value)}
                   className="w-full border border-emerald-400 font-mono p-3 rounded focus:ring-2 focus:ring-emerald-200 outline-none" 
                 />
+                
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Variables (Click to insert)</h4>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => insertText('[Take-off]')} className="text-xs bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded border border-slate-300 transition" title="Measured Quantity">[Take-off]</button>
+                      <button onClick={() => insertText('[Overage %]')} className="text-xs bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded border border-slate-300 transition" title="Waste Factor Percentage">[Overage %]</button>
+                      <button onClick={() => insertText('[Order]')} className="text-xs bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded border border-slate-300 transition" title="Package/Divisor">[Order]</button>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Functions (Click to insert)</h4>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => insertText('ROUNDUP( , 0)')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Round up to decimals">ROUNDUP</button>
+                      <button onClick={() => insertText('ROUNDDOWN( , 0)')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Round down to decimals">ROUNDDOWN</button>
+                      <button onClick={() => insertText('ROUND( , 0)')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Standard round">ROUND</button>
+                      <button onClick={() => insertText('IF( , , )')} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2 py-1 rounded border border-emerald-200 transition" title="If condition is true, return first value, else second">IF</button>
+                      <button onClick={() => insertText('MAX( , )')} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 px-2 py-1 rounded border border-purple-200 transition" title="Maximum of values">MAX</button>
+                      <button onClick={() => insertText('MIN( , )')} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 px-2 py-1 rounded border border-purple-200 transition" title="Minimum of values">MIN</button>
+                      <button onClick={() => insertText('CEILING( )')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Round up to nearest integer">CEILING</button>
+                      <button onClick={() => insertText('FLOOR( )')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Round down to nearest integer">FLOOR</button>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="mt-2 bg-slate-50 p-3 rounded text-xs text-slate-600 border border-slate-200">
+                  <p className="font-bold mb-1">💡 Formula Guide:</p>
+                  <ul className="list-disc pl-4 space-y-1">
+                    <li>Use standard math operators: <code className="bg-white px-1 rounded border">+</code> <code className="bg-white px-1 rounded border">-</code> <code className="bg-white px-1 rounded border">*</code> <code className="bg-white px-1 rounded border">/</code> <code className="bg-white px-1 rounded border">( )</code></li>
+                    <li>Example: <code className="bg-white px-1 rounded border">ROUNDUP([Take-off] * (1 + [Overage %]/100) / [Order], 0)</code></li>
+                    <li>Condition Example: <code className="bg-white px-1 rounded border">IF([Take-off] &gt; 0, MAX([Take-off], 10), 0)</code></li>
+                  </ul>
+                </div>
+
                 <div className="bg-blue-50 p-3 rounded text-sm font-bold text-blue-800">
                   Preview: <span>
                     {evaluateCustomFormula(

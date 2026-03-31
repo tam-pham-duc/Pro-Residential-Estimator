@@ -24,13 +24,40 @@ export function evaluateCustomFormula(formulaStr: string, takeoff: string | numb
         .replace(/\[Take-off\]/ig, t.toString())
         .replace(/\[Overage %\]/ig, o.toString())
         .replace(/\[Overage\]/ig, o.toString())
-        .replace(/\[Order\]/ig, ord.toString())
-        .replace(/ROUNDUP\(([^,)]+)(?:,\s*0)?\)/ig, 'Math.ceil($1)')
-        .replace(/ROUNDDOWN\(([^,)]+)(?:,\s*0)?\)/ig, 'Math.floor($1)')
-        .replace(/ROUND\(([^,)]+)(?:,\s*0)?\)/ig, 'Math.round($1)');
+        .replace(/\[Order\]/ig, ord.toString());
+
+    const ctx = {
+        ROUNDUP: (val: number, decimals: number = 0) => {
+            const multiplier = Math.pow(10, decimals);
+            return Math.ceil(val * multiplier) / multiplier;
+        },
+        ROUNDDOWN: (val: number, decimals: number = 0) => {
+            const multiplier = Math.pow(10, decimals);
+            return Math.floor(val * multiplier) / multiplier;
+        },
+        ROUND: (val: number, decimals: number = 0) => {
+            const multiplier = Math.pow(10, decimals);
+            return Math.round(val * multiplier) / multiplier;
+        },
+        CEILING: (val: number) => Math.ceil(val),
+        FLOOR: (val: number) => Math.floor(val),
+        MAX: Math.max,
+        MIN: Math.min,
+        ABS: Math.abs,
+        SQRT: Math.sqrt,
+        POWER: Math.pow,
+        IF: (cond: any, trueVal: any, falseVal: any) => cond ? trueVal : falseVal
+    };
 
     try {
-        let result = new Function('return ' + parsed)();
+        const functionNames = ['ROUNDUP', 'ROUNDDOWN', 'ROUND', 'CEILING', 'FLOOR', 'MAX', 'MIN', 'ABS', 'SQRT', 'POWER', 'IF'];
+        let safeParsed = parsed;
+        functionNames.forEach(fn => {
+            const regex = new RegExp(`\\b${fn}\\s*\\(`, 'ig');
+            safeParsed = safeParsed.replace(regex, `ctx.${fn}(`);
+        });
+
+        let result = new Function('ctx', 'return ' + safeParsed)(ctx);
         return (isNaN(result) || !isFinite(result)) ? "ERR" : Math.round(result * 100) / 100;
     } catch(e) {
         return "ERR";
