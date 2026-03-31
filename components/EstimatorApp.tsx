@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
-import { evaluateMath, evaluateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals } from '@/lib/estimator-utils';
+import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals } from '@/lib/estimator-utils';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
@@ -12,6 +12,40 @@ import {
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
+import { linter, Diagnostic, lintGutter } from '@codemirror/lint';
+import { MatchDecorator, ViewPlugin, Decoration, DecorationSet, EditorView } from '@codemirror/view';
+
+const formulaHighlightPlugin = ViewPlugin.fromClass(class {
+  decorations: DecorationSet;
+  constructor(view: EditorView) {
+    this.decorations = this.getDeco(view);
+  }
+  update(update: any) {
+    if (update.docChanged || update.viewportChanged) {
+      this.decorations = this.getDeco(update.view);
+    }
+  }
+  getDeco(view: EditorView) {
+    const widgets: any[] = [];
+    for (let {from, to} of view.visibleRanges) {
+      const text = view.state.doc.sliceString(from, to);
+      
+      let match;
+      const varRegex = /\[[a-zA-Z0-9_ %-]+\]/g;
+      while ((match = varRegex.exec(text))) {
+        widgets.push(Decoration.mark({ class: "text-amber-600 font-bold bg-amber-50 px-1 rounded" }).range(from + match.index, from + match.index + match[0].length));
+      }
+
+      const fnRegex = /\b(ROUNDUP|ROUNDDOWN|ROUND|CEILING|FLOOR|MAX|MIN|ABS|SQRT|POWER|IF)\b/g;
+      while ((match = fnRegex.exec(text))) {
+        widgets.push(Decoration.mark({ class: "text-blue-600 font-bold" }).range(from + match.index, from + match.index + match[0].length));
+      }
+    }
+    return Decoration.set(widgets.sort((a, b) => a.from - b.from));
+  }
+}, {
+  decorations: v => v.decorations
+});
 
 const getFormulaCompletions = (customVars: CustomVariable[]) => (context: CompletionContext): CompletionResult | null => {
   let word = context.matchBefore(/\[?[a-zA-Z0-9_ %-]*$/);
@@ -104,6 +138,75 @@ export default function EstimatorApp() {
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
 
   const formulaCompletions = useMemo(() => getFormulaCompletions(customVariables), [customVariables]);
+
+  const formulaLinter = useMemo(() => linter((view) => {
+    const diagnostics: Diagnostic[] = [];
+    const doc = view.state.doc.toString();
+    if (!doc) return diagnostics;
+
+    // Check balanced parentheses
+    let openParens = 0;
+    for (let i = 0; i < doc.length; i++) {
+      if (doc[i] === '(') openParens++;
+      if (doc[i] === ')') openParens--;
+      if (openParens < 0) {
+        diagnostics.push({
+          from: i,
+          to: i + 1,
+          severity: 'error',
+          message: 'Extra closing parenthesis'
+        });
+        openParens = 0;
+      }
+    }
+    if (openParens > 0) {
+      diagnostics.push({
+        from: doc.length,
+        to: doc.length,
+        severity: 'error',
+        message: 'Missing closing parenthesis'
+      });
+    }
+
+    // Check balanced brackets
+    let openBrackets = 0;
+    for (let i = 0; i < doc.length; i++) {
+      if (doc[i] === '[') openBrackets++;
+      if (doc[i] === ']') openBrackets--;
+      if (openBrackets < 0) {
+        diagnostics.push({
+          from: i,
+          to: i + 1,
+          severity: 'error',
+          message: 'Extra closing bracket'
+        });
+        openBrackets = 0;
+      }
+    }
+    if (openBrackets > 0) {
+      diagnostics.push({
+        from: doc.length,
+        to: doc.length,
+        severity: 'error',
+        message: 'Missing closing bracket'
+      });
+    }
+
+    // If basic structure is okay, check evaluate
+    if (diagnostics.length === 0) {
+      const validation = validateCustomFormula(doc, customVariables);
+      if (!validation.valid) {
+        diagnostics.push({
+          from: 0,
+          to: doc.length,
+          severity: 'error',
+          message: validation.error || "Invalid formula"
+        });
+      }
+    }
+
+    return diagnostics;
+  }), [customVariables]);
 
   const [itemModalOpen, setItemModalOpen] = useState(false);
   const [itemModalMode, setItemModalMode] = useState<'add' | 'edit'>('add');
@@ -1295,7 +1398,10 @@ export default function EstimatorApp() {
                     onChange={(val) => setCustomFormula(val)}
                     extensions={[
                       javascript(),
-                      autocompletion({ override: [formulaCompletions] })
+                      autocompletion({ override: [formulaCompletions] }),
+                      lintGutter(),
+                      formulaLinter,
+                      formulaHighlightPlugin
                     ]}
                     className="font-mono text-sm"
                     basicSetup={{
