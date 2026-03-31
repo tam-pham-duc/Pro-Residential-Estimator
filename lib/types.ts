@@ -21,6 +21,13 @@ export type TakeoffItem = {
   custom_formula: string;
 };
 
+export type CustomVariable = {
+  id: string;
+  name: string;
+  value: number;
+  description: string;
+};
+
 export type HistoryRecord = {
   timestamp: string;
   action: string;
@@ -28,6 +35,7 @@ export type HistoryRecord = {
   catalogState: Item[];
   projectName: string;
   clientName: string;
+  customVariables?: CustomVariable[];
 };
 
 export type Job = {
@@ -36,4 +44,5 @@ export type Job = {
   takeoffData: Record<string, TakeoffItem>;
   history: HistoryRecord[];
   lastSaved: string;
+  customVariables?: CustomVariable[];
 };

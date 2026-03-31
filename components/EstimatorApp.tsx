@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals } from '@/lib/estimator-utils';
-import { Item, TakeoffItem, HistoryRecord, Job } from '@/lib/types';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
@@ -13,13 +13,22 @@ import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
 
-const formulaCompletions = (context: CompletionContext): CompletionResult | null => {
+const getFormulaCompletions = (customVars: CustomVariable[]) => (context: CompletionContext): CompletionResult | null => {
   let word = context.matchBefore(/\[?[a-zA-Z0-9_ %-]*$/);
   if (!word || (word.from === word.to && !context.explicit))
     return null;
+    
+  const customVarOptions = customVars.map(cv => ({
+    label: `[${cv.name}]`,
+    type: 'variable',
+    info: `Custom Variable: ${cv.description || 'No description'}. Value: ${cv.value}`,
+    apply: `[${cv.name}]`
+  }));
+
   return {
     from: word.from,
     options: [
+      ...customVarOptions,
       { label: 'ROUNDUP', type: 'function', info: 'Round up to decimals. Ex: ROUNDUP([Take-off], 0)', apply: 'ROUNDUP(' },
       { label: 'ROUNDDOWN', type: 'function', info: 'Round down to decimals. Ex: ROUNDDOWN([Take-off], 1)', apply: 'ROUNDDOWN(' },
       { label: 'ROUND', type: 'function', info: 'Standard round. Ex: ROUND([Take-off] * 1.1, 2)', apply: 'ROUND(' },
@@ -31,6 +40,7 @@ const formulaCompletions = (context: CompletionContext): CompletionResult | null
       { label: '[Take-off]', type: 'variable', info: 'Measured Quantity. Ex: [Take-off] * 1.05' },
       { label: '[Overage %]', type: 'variable', info: 'Waste Factor Percentage. Ex: 1 + ([Overage %] / 100)' },
       { label: '[Order]', type: 'variable', info: 'Package/Divisor. Ex: [Take-off] / [Order]' },
+      ...customVarOptions
     ]
   };
 };
@@ -88,7 +98,12 @@ export default function EstimatorApp() {
   const [qtyMode, setQtyMode] = useState<'auto' | 'manual'>('auto');
   const [customFormula, setCustomFormula] = useState("");
   const [manualQty, setManualQty] = useState("");
+  const [customVariables, setCustomVariables] = useState<CustomVariable[]>([]);
+  const [customVarModalOpen, setCustomVarModalOpen] = useState(false);
+  const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
+
+  const formulaCompletions = useMemo(() => getFormulaCompletions(customVariables), [customVariables]);
 
   const [itemModalOpen, setItemModalOpen] = useState(false);
   const [itemModalMode, setItemModalMode] = useState<'add' | 'edit'>('add');
@@ -130,14 +145,15 @@ export default function EstimatorApp() {
     setIsMounted(true);
   }, []);
 
-  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName) => {
+  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables) => {
     const snapshot: HistoryRecord = {
       timestamp: new Date().toISOString(),
       action: actionDescription,
       dataState: JSON.parse(JSON.stringify(newData)),
       catalogState: JSON.parse(JSON.stringify(newCatalog)),
       projectName: newProj,
-      clientName: newClient
+      clientName: newClient,
+      customVariables: JSON.parse(JSON.stringify(newCustomVars))
     };
     setActionHistory(prev => {
       const pastHistory = prev.slice(historyIndex);
@@ -162,6 +178,7 @@ export default function EstimatorApp() {
       }
       setProjectName(record.projectName);
       setClientName(record.clientName);
+      if (record.customVariables) setCustomVariables(record.customVariables);
       setHistoryIndex(newIndex);
     }
   };
@@ -177,6 +194,7 @@ export default function EstimatorApp() {
       }
       setProjectName(record.projectName);
       setClientName(record.clientName);
+      if (record.customVariables) setCustomVariables(record.customVariables);
       setHistoryIndex(newIndex);
     }
   };
@@ -216,7 +234,8 @@ export default function EstimatorApp() {
             formula,
             newData[itemId].qty,
             newData[itemId].overage_pct,
-            newData[itemId].order_qty
+            newData[itemId].order_qty,
+            customVariables
           ).toString();
         }
       }
@@ -336,7 +355,8 @@ export default function EstimatorApp() {
       clientName,
       takeoffData,
       history: actionHistory,
-      lastSaved: new Date().toISOString()
+      lastSaved: new Date().toISOString(),
+      customVariables
     };
     const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
     setSavedJobs(newSavedJobs);
@@ -353,6 +373,7 @@ export default function EstimatorApp() {
       setHistoryIndex(0);
       setProjectName("");
       setClientName("");
+      setCustomVariables([]);
       return;
     }
     const jobData = savedJobs[selectedId];
@@ -363,7 +384,8 @@ export default function EstimatorApp() {
       setHistoryIndex(0);
       setProjectName(jobData.projectName || "");
       setClientName(jobData.clientName || "");
-      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName), 0);
+      setCustomVariables(jobData.customVariables || []);
+      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || []), 0);
     }
   };
 
@@ -422,7 +444,8 @@ export default function EstimatorApp() {
       exportDate: new Date().toISOString(),
       takeoffData: takeoffData,
       historyLog: actionHistory,
-      catalog: catalog
+      catalog: catalog,
+      customVariables: customVariables
     };
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(fullJobData, null, 2));
     const downloadAnchorNode = document.createElement('a');
@@ -451,8 +474,9 @@ export default function EstimatorApp() {
           }
           setProjectName(importedData.projectName || "");
           setClientName(importedData.clientName || "");
+          setCustomVariables(importedData.customVariables || []);
           
-          setTimeout(() => recordHistory("Imported Job from JSON File", importedData.takeoffData, importedData.catalog || catalog, importedData.projectName, importedData.clientName), 0);
+          setTimeout(() => recordHistory("Imported Job from JSON File", importedData.takeoffData, importedData.catalog || catalog, importedData.projectName, importedData.clientName, importedData.customVariables || []), 0);
           alert("Job Imported Successfully!");
         }
       } catch (err) {
@@ -498,7 +522,8 @@ export default function EstimatorApp() {
           customFormula,
           newData[qtyPanelItemId].qty,
           newData[qtyPanelItemId].overage_pct,
-          newData[qtyPanelItemId].order_qty
+          newData[qtyPanelItemId].order_qty,
+          customVariables
         ).toString();
         setTimeout(() => recordHistory(`Updated Auto Formula for ${itemInfo.item_name}`, newData, catalog, projectName, clientName), 0);
       } else {
@@ -619,6 +644,7 @@ export default function EstimatorApp() {
       }
       setProjectName(record.projectName);
       setClientName(record.clientName);
+      if (record.customVariables) setCustomVariables(record.customVariables);
       setHistoryIndex(index);
       setHistoryModalOpen(false);
     }
@@ -1017,6 +1043,223 @@ export default function EstimatorApp() {
         )}
       </div>
 
+      {/* Custom Variable Modal */}
+      {customVarModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-md p-6 border-t-4 border-amber-500">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Manage Custom Variables</h2>
+              <button onClick={() => { setCustomVarModalOpen(false); setEditingCustomVar(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            
+            <div className="mb-6">
+              <h3 className="text-sm font-bold text-slate-700 mb-2">{editingCustomVar ? 'Edit Variable' : 'Add New Variable'}</h3>
+              <div className="space-y-3 bg-slate-50 p-3 rounded border border-slate-200">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Variable Name (no spaces)</label>
+                  <input 
+                    type="text" 
+                    id="cv-name"
+                    defaultValue={editingCustomVar?.name || ''}
+                    placeholder="e.g. WasteFactor"
+                    className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-amber-200 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Value (number)</label>
+                  <input 
+                    type="number" 
+                    id="cv-value"
+                    defaultValue={editingCustomVar?.value || ''}
+                    placeholder="e.g. 1.15"
+                    step="any"
+                    className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-amber-200 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Description (optional)</label>
+                  <input 
+                    type="text" 
+                    id="cv-desc"
+                    defaultValue={editingCustomVar?.description || ''}
+                    placeholder="e.g. Standard waste factor for drywall"
+                    className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-amber-200 outline-none"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  {editingCustomVar && (
+                    <button 
+                      onClick={() => setEditingCustomVar(null)}
+                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded transition"
+                    >
+                      Cancel Edit
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => {
+                      const nameInput = document.getElementById('cv-name') as HTMLInputElement;
+                      const valueInput = document.getElementById('cv-value') as HTMLInputElement;
+                      const descInput = document.getElementById('cv-desc') as HTMLInputElement;
+                      
+                      const name = nameInput.value.trim().replace(/\s+/g, '_');
+                      const value = parseFloat(valueInput.value);
+                      const desc = descInput.value.trim();
+                      
+                      if (!name) {
+                        alert("Please enter a variable name.");
+                        return;
+                      }
+                      if (isNaN(value)) {
+                        alert("Please enter a valid numeric value.");
+                        return;
+                      }
+                      
+                      let newVars = [...customVariables];
+                      if (editingCustomVar) {
+                        newVars = newVars.map(v => v.id === editingCustomVar.id ? { ...v, name, value, description: desc } : v);
+                      } else {
+                        // Check for duplicates
+                        if (newVars.some(v => v.name.toLowerCase() === name.toLowerCase()) || 
+                            FORMULA_VARIABLES.some(v => v.name.toLowerCase() === name.toLowerCase())) {
+                          alert("A variable with this name already exists.");
+                          return;
+                        }
+                        newVars.push({
+                          id: "CV-" + Date.now(),
+                          name,
+                          value,
+                          description: desc
+                        });
+                      }
+                      
+                      // Recalculate all auto formulas with new variables
+                      const newData = { ...takeoffData };
+                      let hasChanges = false;
+                      for (const itemId in newData) {
+                        if (newData[itemId].qty_mode !== 'manual') {
+                          const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+                          const newQty = evaluateCustomFormula(
+                            formula,
+                            newData[itemId].qty,
+                            newData[itemId].overage_pct,
+                            newData[itemId].order_qty,
+                            newVars
+                          ).toString();
+                          if (newData[itemId].measured_qty !== newQty) {
+                            newData[itemId].measured_qty = newQty;
+                            hasChanges = true;
+                          }
+                        }
+                      }
+                      
+                      setCustomVariables(newVars);
+                      if (hasChanges) setTakeoffData(newData);
+                      
+                      recordHistory(editingCustomVar ? `Updated variable ${name}` : `Added variable ${name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, newVars);
+                      
+                      // Reset form
+                      nameInput.value = '';
+                      valueInput.value = '';
+                      descInput.value = '';
+                      setEditingCustomVar(null);
+                    }}
+                    className="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded transition"
+                  >
+                    {editingCustomVar ? 'Update Variable' : 'Add Variable'}
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <div>
+              <h3 className="text-sm font-bold text-slate-700 mb-2">Existing Variables</h3>
+              <div className="max-h-48 overflow-y-auto border rounded bg-white">
+                {customVariables.length === 0 ? (
+                  <div className="p-4 text-center text-sm text-slate-400 italic">No custom variables defined.</div>
+                ) : (
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="p-2 border-b font-bold text-slate-600">Name</th>
+                        <th className="p-2 border-b font-bold text-slate-600">Value</th>
+                        <th className="p-2 border-b font-bold text-slate-600 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {customVariables.map(v => (
+                        <tr key={v.id} className="border-b last:border-0 hover:bg-slate-50">
+                          <td className="p-2 font-mono text-xs text-amber-700">[{v.name}]</td>
+                          <td className="p-2 font-mono text-xs">{v.value}</td>
+                          <td className="p-2 text-right">
+                            <button 
+                              onClick={() => {
+                                setEditingCustomVar(v);
+                                // Small delay to let React render the form inputs with new default values
+                                setTimeout(() => {
+                                  const nameInput = document.getElementById('cv-name') as HTMLInputElement;
+                                  const valueInput = document.getElementById('cv-value') as HTMLInputElement;
+                                  const descInput = document.getElementById('cv-desc') as HTMLInputElement;
+                                  if (nameInput) nameInput.value = v.name;
+                                  if (valueInput) valueInput.value = v.value.toString();
+                                  if (descInput) descInput.value = v.description || '';
+                                }, 10);
+                              }}
+                              className="text-blue-500 hover:text-blue-700 mr-3 text-xs"
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`Delete variable [${v.name}]?`)) {
+                                  const newVars = customVariables.filter(cv => cv.id !== v.id);
+                                  
+                                  // Recalculate all auto formulas with new variables
+                                  const newData = { ...takeoffData };
+                                  let hasChanges = false;
+                                  for (const itemId in newData) {
+                                    if (newData[itemId].qty_mode !== 'manual') {
+                                      const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+                                      const newQty = evaluateCustomFormula(
+                                        formula,
+                                        newData[itemId].qty,
+                                        newData[itemId].overage_pct,
+                                        newData[itemId].order_qty,
+                                        newVars
+                                      ).toString();
+                                      if (newData[itemId].measured_qty !== newQty) {
+                                        newData[itemId].measured_qty = newQty;
+                                        hasChanges = true;
+                                      }
+                                    }
+                                  }
+                                  
+                                  setCustomVariables(newVars);
+                                  if (hasChanges) setTakeoffData(newData);
+                                  
+                                  recordHistory(`Deleted variable ${v.name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, newVars);
+                                  if (editingCustomVar?.id === v.id) setEditingCustomVar(null);
+                                }
+                              }}
+                              className="text-red-500 hover:text-red-700 text-xs"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+            
+            <div className="mt-6 flex justify-end pt-4 border-t">
+              <button onClick={() => { setCustomVarModalOpen(false); setEditingCustomVar(null); }} className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded font-bold transition">Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* QTY Panel Modal */}
       {qtyPanelOpen && (
         <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-50">
@@ -1080,8 +1323,37 @@ export default function EstimatorApp() {
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-60 overflow-y-auto pr-2">
                     <div>
-                      <h5 className="text-xs font-bold text-slate-500 uppercase mb-2 sticky top-0 bg-white py-1">Variables</h5>
+                      <div className="flex items-center justify-between mb-2 sticky top-0 bg-white py-1">
+                        <h5 className="text-xs font-bold text-slate-500 uppercase">Variables</h5>
+                        <button 
+                          onClick={() => setCustomVarModalOpen(true)}
+                          className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded border border-slate-200 transition"
+                        >
+                          Manage Custom
+                        </button>
+                      </div>
                       <div className="flex flex-col gap-2">
+                        {/* Custom Variables */}
+                        {customVariables.filter(v => 
+                          v.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
+                          (v.description && v.description.toLowerCase().includes(formulaHelpSearch.toLowerCase()))
+                        ).map(v => (
+                          <div key={v.id} className="flex items-start justify-between group bg-amber-50 hover:bg-amber-100 p-2 rounded border border-amber-200 transition">
+                            <div className="flex-1 pr-2">
+                              <div className="font-mono text-xs font-bold text-amber-700">[{v.name}]</div>
+                              <div className="text-[10px] text-slate-500 mb-1">{v.description || 'Custom variable'}</div>
+                              <div className="text-[9px] text-slate-400 font-mono bg-white px-1 py-0.5 rounded border border-slate-100 inline-block">Value: {v.value}</div>
+                            </div>
+                            <button 
+                              onClick={() => insertText(`[${v.name}]`)} 
+                              className="text-xs bg-white hover:bg-amber-50 text-amber-600 px-2 py-1 rounded border border-amber-200 opacity-0 group-hover:opacity-100 transition shrink-0"
+                            >
+                              Insert
+                            </button>
+                          </div>
+                        ))}
+                        
+                        {/* Predefined Variables */}
                         {FORMULA_VARIABLES.filter(v => 
                           v.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
                           v.description.toLowerCase().includes(formulaHelpSearch.toLowerCase())
@@ -1155,7 +1427,8 @@ export default function EstimatorApp() {
                       customFormula, 
                       takeoffData[qtyPanelItemId]?.qty || 0, 
                       takeoffData[qtyPanelItemId]?.overage_pct || 0, 
-                      takeoffData[qtyPanelItemId]?.order_qty || 1
+                      takeoffData[qtyPanelItemId]?.order_qty || 1,
+                      customVariables
                     ).toString()}
                   </span>
                 </div>

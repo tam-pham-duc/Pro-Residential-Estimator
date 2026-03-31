@@ -12,7 +12,13 @@ export function evaluateMath(inputStr: string | number): string | number {
     }
 }
 
-export function evaluateCustomFormula(formulaStr: string, takeoff: string | number, overage: string | number, order: string | number): string | number {
+export function evaluateCustomFormula(
+    formulaStr: string, 
+    takeoff: string | number, 
+    overage: string | number, 
+    order: string | number,
+    customVars: { name: string, value: number }[] = []
+): string | number {
     if (!formulaStr) return "";
     
     let t = parseFloat(takeoff as string) || 0;
@@ -25,6 +31,12 @@ export function evaluateCustomFormula(formulaStr: string, takeoff: string | numb
         .replace(/\[Overage %\]/ig, o.toString())
         .replace(/\[Overage\]/ig, o.toString())
         .replace(/\[Order\]/ig, ord.toString());
+
+    customVars.forEach(cv => {
+        const escapedName = cv.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`\\[${escapedName}\\]`, 'ig');
+        parsed = parsed.replace(regex, cv.value.toString());
+    });
 
     const ctx = {
         ROUNDUP: (val: number, decimals: number = 0) => {
