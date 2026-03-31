@@ -9,6 +9,31 @@ import {
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
   Undo2, Redo2
 } from 'lucide-react';
+import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
+import { javascript } from '@codemirror/lang-javascript';
+import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
+
+const formulaCompletions = (context: CompletionContext): CompletionResult | null => {
+  let word = context.matchBefore(/\[?[a-zA-Z0-9_ %-]*$/);
+  if (!word || (word.from === word.to && !context.explicit))
+    return null;
+  return {
+    from: word.from,
+    options: [
+      { label: 'ROUNDUP', type: 'function', info: 'Round up to decimals', apply: 'ROUNDUP(' },
+      { label: 'ROUNDDOWN', type: 'function', info: 'Round down to decimals', apply: 'ROUNDDOWN(' },
+      { label: 'ROUND', type: 'function', info: 'Standard round', apply: 'ROUND(' },
+      { label: 'IF', type: 'function', info: 'If condition is true, return first value, else second', apply: 'IF(' },
+      { label: 'MAX', type: 'function', info: 'Maximum of values', apply: 'MAX(' },
+      { label: 'MIN', type: 'function', info: 'Minimum of values', apply: 'MIN(' },
+      { label: 'CEILING', type: 'function', info: 'Round up to nearest integer', apply: 'CEILING(' },
+      { label: 'FLOOR', type: 'function', info: 'Round down to nearest integer', apply: 'FLOOR(' },
+      { label: '[Take-off]', type: 'variable', info: 'Measured Quantity' },
+      { label: '[Overage %]', type: 'variable', info: 'Waste Factor Percentage' },
+      { label: '[Order]', type: 'variable', info: 'Package/Divisor' },
+    ]
+  };
+};
 
 function Clock() {
   const [time, setTime] = useState<Date | null>(null);
@@ -66,7 +91,7 @@ export default function EstimatorApp() {
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const formulaInputRef = useRef<HTMLInputElement>(null);
+  const formulaInputRef = useRef<ReactCodeMirrorRef>(null);
 
   useEffect(() => {
     const savedCatalog = localStorage.getItem('userItemCatalog');
@@ -469,16 +494,18 @@ export default function EstimatorApp() {
   };
 
   const insertText = (text: string) => {
-    const input = formulaInputRef.current;
-    if (input) {
-      const start = input.selectionStart || 0;
-      const end = input.selectionEnd || 0;
-      const newFormula = customFormula.substring(0, start) + text + customFormula.substring(end);
-      setCustomFormula(newFormula);
-      setTimeout(() => {
-        input.focus();
-        input.setSelectionRange(start + text.length, start + text.length);
-      }, 0);
+    if (formulaInputRef.current?.view) {
+      const view = formulaInputRef.current.view;
+      const selection = view.state.selection.main;
+      view.dispatch({
+        changes: {
+          from: selection.from,
+          to: selection.to,
+          insert: text
+        },
+        selection: { anchor: selection.from + text.length }
+      });
+      view.focus();
     } else {
       setCustomFormula(prev => prev + text);
     }
@@ -1000,13 +1027,23 @@ export default function EstimatorApp() {
             
             {qtyMode === 'auto' ? (
               <div className="space-y-4">
-                <input 
-                  type="text" 
-                  ref={formulaInputRef}
-                  value={customFormula}
-                  onChange={(e) => setCustomFormula(e.target.value)}
-                  className="w-full border border-emerald-400 font-mono p-3 rounded focus:ring-2 focus:ring-emerald-200 outline-none" 
-                />
+                <div className="border border-emerald-400 rounded overflow-hidden focus-within:ring-2 focus-within:ring-emerald-200">
+                  <CodeMirror
+                    ref={formulaInputRef}
+                    value={customFormula}
+                    onChange={(val) => setCustomFormula(val)}
+                    extensions={[
+                      javascript(),
+                      autocompletion({ override: [formulaCompletions] })
+                    ]}
+                    className="font-mono text-sm"
+                    basicSetup={{
+                      lineNumbers: false,
+                      foldGutter: false,
+                      highlightActiveLine: false,
+                    }}
+                  />
+                </div>
                 
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
                   <div>
