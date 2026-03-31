@@ -52,6 +52,23 @@ function Clock() {
   );
 }
 
+const FORMULA_VARIABLES = [
+  { name: '[Take-off]', description: 'Measured Quantity', insert: '[Take-off]' },
+  { name: '[Overage %]', description: 'Waste Factor Percentage', insert: '[Overage %]' },
+  { name: '[Order]', description: 'Package/Divisor', insert: '[Order]' },
+];
+
+const FORMULA_FUNCTIONS = [
+  { name: 'ROUNDUP', description: 'Round up to decimals', insert: 'ROUNDUP( , 0)' },
+  { name: 'ROUNDDOWN', description: 'Round down to decimals', insert: 'ROUNDDOWN( , 0)' },
+  { name: 'ROUND', description: 'Standard round', insert: 'ROUND( , 0)' },
+  { name: 'IF', description: 'If condition is true, return first value, else second', insert: 'IF( , , )' },
+  { name: 'MAX', description: 'Maximum of values', insert: 'MAX( , )' },
+  { name: 'MIN', description: 'Minimum of values', insert: 'MIN( , )' },
+  { name: 'CEILING', description: 'Round up to nearest integer', insert: 'CEILING( )' },
+  { name: 'FLOOR', description: 'Round down to nearest integer', insert: 'FLOOR( )' },
+];
+
 export default function EstimatorApp() {
   const [isMounted, setIsMounted] = useState(false);
   const [catalog, setCatalog] = useState<Item[]>([]);
@@ -71,6 +88,7 @@ export default function EstimatorApp() {
   const [qtyMode, setQtyMode] = useState<'auto' | 'manual'>('auto');
   const [customFormula, setCustomFormula] = useState("");
   const [manualQty, setManualQty] = useState("");
+  const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
 
   const [itemModalOpen, setItemModalOpen] = useState(false);
   const [itemModalMode, setItemModalMode] = useState<'add' | 'edit'>('add');
@@ -1045,26 +1063,77 @@ export default function EstimatorApp() {
                   />
                 </div>
                 
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Variables (Click to insert)</h4>
-                    <div className="flex flex-wrap gap-2">
-                      <button onClick={() => insertText('[Take-off]')} className="text-xs bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded border border-slate-300 transition" title="Measured Quantity">[Take-off]</button>
-                      <button onClick={() => insertText('[Overage %]')} className="text-xs bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded border border-slate-300 transition" title="Waste Factor Percentage">[Overage %]</button>
-                      <button onClick={() => insertText('[Order]')} className="text-xs bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded border border-slate-300 transition" title="Package/Divisor">[Order]</button>
+                <div className="mt-4 border-t pt-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-sm font-bold text-slate-700">Formula Helper</h4>
+                    <div className="relative w-64">
+                      <Search className="absolute left-2 top-1.5 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search functions & variables..."
+                        value={formulaHelpSearch}
+                        onChange={(e) => setFormulaHelpSearch(e.target.value)}
+                        className="w-full pl-8 pr-2 py-1 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-emerald-500 outline-none"
+                      />
                     </div>
                   </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Functions (Click to insert)</h4>
-                    <div className="flex flex-wrap gap-2">
-                      <button onClick={() => insertText('ROUNDUP( , 0)')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Round up to decimals">ROUNDUP</button>
-                      <button onClick={() => insertText('ROUNDDOWN( , 0)')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Round down to decimals">ROUNDDOWN</button>
-                      <button onClick={() => insertText('ROUND( , 0)')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Standard round">ROUND</button>
-                      <button onClick={() => insertText('IF( , , )')} className="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-2 py-1 rounded border border-emerald-200 transition" title="If condition is true, return first value, else second">IF</button>
-                      <button onClick={() => insertText('MAX( , )')} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 px-2 py-1 rounded border border-purple-200 transition" title="Maximum of values">MAX</button>
-                      <button onClick={() => insertText('MIN( , )')} className="text-xs bg-purple-50 hover:bg-purple-100 text-purple-700 px-2 py-1 rounded border border-purple-200 transition" title="Minimum of values">MIN</button>
-                      <button onClick={() => insertText('CEILING( )')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Round up to nearest integer">CEILING</button>
-                      <button onClick={() => insertText('FLOOR( )')} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2 py-1 rounded border border-blue-200 transition" title="Round down to nearest integer">FLOOR</button>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-60 overflow-y-auto pr-2">
+                    <div>
+                      <h5 className="text-xs font-bold text-slate-500 uppercase mb-2 sticky top-0 bg-white py-1">Variables</h5>
+                      <div className="flex flex-col gap-2">
+                        {FORMULA_VARIABLES.filter(v => 
+                          v.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
+                          v.description.toLowerCase().includes(formulaHelpSearch.toLowerCase())
+                        ).map(v => (
+                          <div key={v.name} className="flex items-start justify-between group bg-slate-50 hover:bg-slate-100 p-2 rounded border border-slate-200 transition">
+                            <div>
+                              <div className="font-mono text-xs font-bold text-slate-700">{v.name}</div>
+                              <div className="text-[10px] text-slate-500">{v.description}</div>
+                            </div>
+                            <button 
+                              onClick={() => insertText(v.insert)} 
+                              className="text-xs bg-white hover:bg-emerald-50 text-emerald-600 px-2 py-1 rounded border border-emerald-200 opacity-0 group-hover:opacity-100 transition"
+                            >
+                              Insert
+                            </button>
+                          </div>
+                        ))}
+                        {FORMULA_VARIABLES.filter(v => 
+                          v.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
+                          v.description.toLowerCase().includes(formulaHelpSearch.toLowerCase())
+                        ).length === 0 && (
+                          <div className="text-xs text-slate-400 italic p-2">No variables found</div>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <h5 className="text-xs font-bold text-slate-500 uppercase mb-2 sticky top-0 bg-white py-1">Functions</h5>
+                      <div className="flex flex-col gap-2">
+                        {FORMULA_FUNCTIONS.filter(f => 
+                          f.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
+                          f.description.toLowerCase().includes(formulaHelpSearch.toLowerCase())
+                        ).map(f => (
+                          <div key={f.name} className="flex items-start justify-between group bg-blue-50/50 hover:bg-blue-50 p-2 rounded border border-blue-100 transition">
+                            <div>
+                              <div className="font-mono text-xs font-bold text-blue-700">{f.name}</div>
+                              <div className="text-[10px] text-slate-500">{f.description}</div>
+                            </div>
+                            <button 
+                              onClick={() => insertText(f.insert)} 
+                              className="text-xs bg-white hover:bg-blue-100 text-blue-600 px-2 py-1 rounded border border-blue-200 opacity-0 group-hover:opacity-100 transition"
+                            >
+                              Insert
+                            </button>
+                          </div>
+                        ))}
+                        {FORMULA_FUNCTIONS.filter(f => 
+                          f.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
+                          f.description.toLowerCase().includes(formulaHelpSearch.toLowerCase())
+                        ).length === 0 && (
+                          <div className="text-xs text-slate-400 italic p-2">No functions found</div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
