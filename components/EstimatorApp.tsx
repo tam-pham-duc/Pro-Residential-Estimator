@@ -20,17 +20,17 @@ const formulaCompletions = (context: CompletionContext): CompletionResult | null
   return {
     from: word.from,
     options: [
-      { label: 'ROUNDUP', type: 'function', info: 'Round up to decimals', apply: 'ROUNDUP(' },
-      { label: 'ROUNDDOWN', type: 'function', info: 'Round down to decimals', apply: 'ROUNDDOWN(' },
-      { label: 'ROUND', type: 'function', info: 'Standard round', apply: 'ROUND(' },
-      { label: 'IF', type: 'function', info: 'If condition is true, return first value, else second', apply: 'IF(' },
-      { label: 'MAX', type: 'function', info: 'Maximum of values', apply: 'MAX(' },
-      { label: 'MIN', type: 'function', info: 'Minimum of values', apply: 'MIN(' },
-      { label: 'CEILING', type: 'function', info: 'Round up to nearest integer', apply: 'CEILING(' },
-      { label: 'FLOOR', type: 'function', info: 'Round down to nearest integer', apply: 'FLOOR(' },
-      { label: '[Take-off]', type: 'variable', info: 'Measured Quantity' },
-      { label: '[Overage %]', type: 'variable', info: 'Waste Factor Percentage' },
-      { label: '[Order]', type: 'variable', info: 'Package/Divisor' },
+      { label: 'ROUNDUP', type: 'function', info: 'Round up to decimals. Ex: ROUNDUP([Take-off], 0)', apply: 'ROUNDUP(' },
+      { label: 'ROUNDDOWN', type: 'function', info: 'Round down to decimals. Ex: ROUNDDOWN([Take-off], 1)', apply: 'ROUNDDOWN(' },
+      { label: 'ROUND', type: 'function', info: 'Standard round. Ex: ROUND([Take-off] * 1.1, 2)', apply: 'ROUND(' },
+      { label: 'IF', type: 'function', info: 'If condition is true, return first value, else second. Ex: IF([Take-off] > 10, 10, [Take-off])', apply: 'IF(' },
+      { label: 'MAX', type: 'function', info: 'Maximum of values. Ex: MAX([Take-off], 5)', apply: 'MAX(' },
+      { label: 'MIN', type: 'function', info: 'Minimum of values. Ex: MIN([Take-off], 100)', apply: 'MIN(' },
+      { label: 'CEILING', type: 'function', info: 'Round up to nearest integer. Ex: CEILING([Take-off] / [Order])', apply: 'CEILING(' },
+      { label: 'FLOOR', type: 'function', info: 'Round down to nearest integer. Ex: FLOOR([Take-off] / [Order])', apply: 'FLOOR(' },
+      { label: '[Take-off]', type: 'variable', info: 'Measured Quantity. Ex: [Take-off] * 1.05' },
+      { label: '[Overage %]', type: 'variable', info: 'Waste Factor Percentage. Ex: 1 + ([Overage %] / 100)' },
+      { label: '[Order]', type: 'variable', info: 'Package/Divisor. Ex: [Take-off] / [Order]' },
     ]
   };
 };
@@ -53,20 +53,20 @@ function Clock() {
 }
 
 const FORMULA_VARIABLES = [
-  { name: '[Take-off]', description: 'Measured Quantity', insert: '[Take-off]' },
-  { name: '[Overage %]', description: 'Waste Factor Percentage', insert: '[Overage %]' },
-  { name: '[Order]', description: 'Package/Divisor', insert: '[Order]' },
+  { name: '[Take-off]', description: 'Measured Quantity', insert: '[Take-off]', example: '[Take-off] * 1.05' },
+  { name: '[Overage %]', description: 'Waste Factor Percentage', insert: '[Overage %]', example: '1 + ([Overage %] / 100)' },
+  { name: '[Order]', description: 'Package/Divisor', insert: '[Order]', example: '[Take-off] / [Order]' },
 ];
 
 const FORMULA_FUNCTIONS = [
-  { name: 'ROUNDUP', description: 'Round up to decimals', insert: 'ROUNDUP( , 0)' },
-  { name: 'ROUNDDOWN', description: 'Round down to decimals', insert: 'ROUNDDOWN( , 0)' },
-  { name: 'ROUND', description: 'Standard round', insert: 'ROUND( , 0)' },
-  { name: 'IF', description: 'If condition is true, return first value, else second', insert: 'IF( , , )' },
-  { name: 'MAX', description: 'Maximum of values', insert: 'MAX( , )' },
-  { name: 'MIN', description: 'Minimum of values', insert: 'MIN( , )' },
-  { name: 'CEILING', description: 'Round up to nearest integer', insert: 'CEILING( )' },
-  { name: 'FLOOR', description: 'Round down to nearest integer', insert: 'FLOOR( )' },
+  { name: 'ROUNDUP', description: 'Round up to decimals', insert: 'ROUNDUP( , 0)', example: 'ROUNDUP([Take-off], 0)' },
+  { name: 'ROUNDDOWN', description: 'Round down to decimals', insert: 'ROUNDDOWN( , 0)', example: 'ROUNDDOWN([Take-off], 1)' },
+  { name: 'ROUND', description: 'Standard round', insert: 'ROUND( , 0)', example: 'ROUND([Take-off] * 1.1, 2)' },
+  { name: 'IF', description: 'If condition is true, return first value, else second', insert: 'IF( , , )', example: 'IF([Take-off] > 10, 10, [Take-off])' },
+  { name: 'MAX', description: 'Maximum of values', insert: 'MAX( , )', example: 'MAX([Take-off], 5)' },
+  { name: 'MIN', description: 'Minimum of values', insert: 'MIN( , )', example: 'MIN([Take-off], 100)' },
+  { name: 'CEILING', description: 'Round up to nearest integer', insert: 'CEILING( )', example: 'CEILING([Take-off] / [Order])' },
+  { name: 'FLOOR', description: 'Round down to nearest integer', insert: 'FLOOR( )', example: 'FLOOR([Take-off] / [Order])' },
 ];
 
 export default function EstimatorApp() {
@@ -1087,13 +1087,14 @@ export default function EstimatorApp() {
                           v.description.toLowerCase().includes(formulaHelpSearch.toLowerCase())
                         ).map(v => (
                           <div key={v.name} className="flex items-start justify-between group bg-slate-50 hover:bg-slate-100 p-2 rounded border border-slate-200 transition">
-                            <div>
+                            <div className="flex-1 pr-2">
                               <div className="font-mono text-xs font-bold text-slate-700">{v.name}</div>
-                              <div className="text-[10px] text-slate-500">{v.description}</div>
+                              <div className="text-[10px] text-slate-500 mb-1">{v.description}</div>
+                              <div className="text-[9px] text-slate-400 font-mono bg-white px-1 py-0.5 rounded border border-slate-100 inline-block">Ex: {v.example}</div>
                             </div>
                             <button 
                               onClick={() => insertText(v.insert)} 
-                              className="text-xs bg-white hover:bg-emerald-50 text-emerald-600 px-2 py-1 rounded border border-emerald-200 opacity-0 group-hover:opacity-100 transition"
+                              className="text-xs bg-white hover:bg-emerald-50 text-emerald-600 px-2 py-1 rounded border border-emerald-200 opacity-0 group-hover:opacity-100 transition shrink-0"
                             >
                               Insert
                             </button>
@@ -1115,13 +1116,14 @@ export default function EstimatorApp() {
                           f.description.toLowerCase().includes(formulaHelpSearch.toLowerCase())
                         ).map(f => (
                           <div key={f.name} className="flex items-start justify-between group bg-blue-50/50 hover:bg-blue-50 p-2 rounded border border-blue-100 transition">
-                            <div>
+                            <div className="flex-1 pr-2">
                               <div className="font-mono text-xs font-bold text-blue-700">{f.name}</div>
-                              <div className="text-[10px] text-slate-500">{f.description}</div>
+                              <div className="text-[10px] text-slate-500 mb-1">{f.description}</div>
+                              <div className="text-[9px] text-slate-400 font-mono bg-white px-1 py-0.5 rounded border border-slate-100 inline-block">Ex: {f.example}</div>
                             </div>
                             <button 
                               onClick={() => insertText(f.insert)} 
-                              className="text-xs bg-white hover:bg-blue-100 text-blue-600 px-2 py-1 rounded border border-blue-200 opacity-0 group-hover:opacity-100 transition"
+                              className="text-xs bg-white hover:bg-blue-100 text-blue-600 px-2 py-1 rounded border border-blue-200 opacity-0 group-hover:opacity-100 transition shrink-0"
                             >
                               Insert
                             </button>
