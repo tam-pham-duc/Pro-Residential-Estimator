@@ -993,14 +993,14 @@ export default function EstimatorApp() {
     <div className="bg-slate-50 font-sans min-h-screen pb-10 text-slate-800">
       {/* Header */}
       <div className="bg-slate-800 text-white shadow-md border-b-4 border-emerald-500">
-        <div className="max-w-[98%] mx-auto px-4 py-4 flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
+        <div className="max-w-[98%] mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-4 md:gap-0">
+          <div className="text-center md:text-left">
+            <h1 className="text-xl md:text-2xl font-bold flex items-center justify-center md:justify-start gap-2">
               <Home className="text-emerald-400" /> Pro Residential Estimator
             </h1>
             <Clock />
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap justify-center md:justify-end gap-3">
             <button onClick={() => openItemModal('add')} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
               <Plus size={16} /> Add Item
             </button>
@@ -1013,12 +1013,12 @@ export default function EstimatorApp() {
 
       {/* Toolbar */}
       <div className="bg-white border-b border-slate-200 shadow-sm mb-6 sticky top-0 z-40">
-        <div className="max-w-[98%] mx-auto px-4 py-3 flex justify-between items-center gap-4">
-          <div className="flex items-center gap-2 w-1/4">
+        <div className="max-w-[98%] mx-auto px-4 py-3 flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 w-full md:w-1/4">
             <select 
               value={currentJobId} 
               onChange={loadJobFromSelect} 
-              className="border border-slate-300 rounded p-2 text-sm font-bold text-slate-700 w-full focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
+              className="border border-slate-300 rounded p-2 text-sm font-bold text-slate-700 w-full md:w-auto flex-1 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
             >
               <option value="">-- Create New Job --</option>
               {Object.entries(savedJobs).map(([id, job]) => (
@@ -1034,8 +1034,8 @@ export default function EstimatorApp() {
               <Save size={16} /> Save Template
             </button>
           </div>
-          <div className="flex-1 flex items-center justify-center gap-2">
-            <div className="relative w-full max-w-md">
+          <div className="w-full md:flex-1 flex flex-col md:flex-row items-center justify-center gap-2">
+            <div className="relative w-full md:max-w-md">
               <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
               <input 
                 type="text" 
@@ -1046,7 +1046,7 @@ export default function EstimatorApp() {
               />
             </div>
             {selectedItems.size > 0 && (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center justify-center gap-1 w-full md:w-auto mt-2 md:mt-0">
                 <button 
                   onClick={() => setScopeForSelected(true)}
                   className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 px-3 py-2 rounded-l-full text-sm font-bold flex items-center gap-1 whitespace-nowrap transition-colors border border-emerald-200"
@@ -1071,7 +1071,7 @@ export default function EstimatorApp() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2 w-1/4 justify-end text-sm">
+          <div className="flex flex-wrap items-center justify-center md:justify-end gap-2 w-full md:w-1/4 text-sm">
             <button 
               onClick={undo} 
               disabled={!canUndo}
@@ -1110,7 +1110,7 @@ export default function EstimatorApp() {
 
       {/* Project Info */}
       <div className="max-w-[98%] mx-auto px-4 mb-6">
-        <div className="bg-white p-5 rounded-lg shadow-sm border border-blue-100 flex gap-6">
+        <div className="bg-white p-5 rounded-lg shadow-sm border border-blue-100 flex flex-col md:flex-row gap-4 md:gap-6">
           <div className="flex-1">
             <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Project Name</label>
             <input 
@@ -1215,7 +1215,7 @@ export default function EstimatorApp() {
                                 </div>
                                 
                                 <div className={`${isSub1Collapsed ? 'hidden' : 'block'}`}>
-                                  <table className="w-full text-left mb-4 max-w-full">
+                                  <table className="w-full text-left mb-4 max-w-full block md:table">
                                     <thead className="text-xs uppercase text-slate-700 bg-slate-100 border-b-2 border-slate-200 hidden md:table-header-group leading-tight">
                                       <tr>
                                         <th className="px-3 py-2 text-center min-w-[40px] whitespace-nowrap">
@@ -1239,7 +1239,7 @@ export default function EstimatorApp() {
                                         <th className="px-3 py-2 min-w-[150px] font-bold whitespace-nowrap">RULE / NOTE<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(logic)</span></th>
                                       </tr>
                                     </thead>
-                                    <tbody>
+                                    <tbody className="block md:table-row-group">
                                       {items.map(item => {
                                         const rowData = takeoffData[item.item_id] || { in_scope: false, spec: "", qty: "", measured_qty: "", overage_pct: "", order_qty: "", evidence: "", qty_mode: "auto" };
                                         const isChecked = rowData.in_scope;
@@ -1257,8 +1257,9 @@ export default function EstimatorApp() {
                                             : "border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 focus:border-blue-500";
 
                                         return (
-                                          <tr key={item.item_id} className={`${rowBg} border-b border-slate-200 group`}>
-                                            <td className="px-2 py-2 text-center border-r border-slate-200/50">
+                                          <tr key={item.item_id} className={`${rowBg} border-b border-slate-200 group flex flex-col md:table-row p-3 md:p-0 gap-2 md:gap-0 relative`}>
+                                            <td className="px-2 py-1 md:py-2 flex items-center justify-between md:table-cell md:text-center border-b md:border-b-0 border-slate-200/50 md:border-r">
+                                              <span className="md:hidden text-xs font-bold text-slate-500 uppercase">Select</span>
                                               <input 
                                                 type="checkbox" 
                                                 className="w-4 h-4 cursor-pointer accent-indigo-600" 
@@ -1266,7 +1267,8 @@ export default function EstimatorApp() {
                                                 onChange={(e) => handleSelectItem(item.item_id, e.target.checked)}
                                               />
                                             </td>
-                                            <td className="px-2 py-2 text-center">
+                                            <td className="px-2 py-1 md:py-2 flex items-center justify-between md:table-cell md:text-center border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-slate-500 uppercase">In Scope</span>
                                               <input 
                                                 type="checkbox" 
                                                 className="w-5 h-5 cursor-pointer accent-emerald-600" 
@@ -1274,21 +1276,23 @@ export default function EstimatorApp() {
                                                 onChange={(e) => updateTakeoffData(item.item_id, 'in_scope', e.target.checked, item.calc_factor_instruction, item.item_name)}
                                               />
                                             </td>
-                                            <td className="px-2 py-2 pl-4">
-                                              <div className="flex items-center justify-between">
+                                            <td className="px-2 py-1 md:py-2 md:pl-4 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Material Name</span>
+                                              <div className="flex items-center justify-between w-full">
                                                 <input 
                                                   type="text" 
-                                                  className="font-bold text-slate-800 text-[13px] bg-transparent border border-transparent hover:border-slate-300 focus:border-emerald-500 focus:bg-white rounded px-1 w-full outline-none transition-colors" 
+                                                  className="font-bold text-slate-800 text-[13px] bg-transparent border border-slate-200 md:border-transparent hover:border-slate-300 focus:border-emerald-500 focus:bg-white rounded px-2 md:px-1 py-1 md:py-0 w-full outline-none transition-colors" 
                                                   defaultValue={item.item_name} 
                                                   onBlur={(e) => updateItemName(item.item_id, e.target.value)} 
                                                   onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                                 />
-                                                <button onClick={() => openItemModal('edit', item.item_id)} className="text-slate-400 hover:text-blue-600 px-1 ml-1" title="Advanced Edit">
+                                                <button onClick={() => openItemModal('edit', item.item_id)} className="text-slate-400 hover:text-blue-600 px-2 md:px-1 ml-1" title="Advanced Edit">
                                                   <Edit2 size={14} />
                                                 </button>
                                               </div>
                                             </td>
-                                            <td className="px-2 py-2">
+                                            <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Spec (Details)</span>
                                               <input 
                                                 type="text" 
                                                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
@@ -1300,7 +1304,8 @@ export default function EstimatorApp() {
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
-                                            <td className="px-2 py-2">
+                                            <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-emerald-700 uppercase mb-1">Take-off (Measured)</span>
                                               <input 
                                                 type="text" 
                                                 className="w-full border border-emerald-300 bg-emerald-50 rounded px-2 py-1.5 text-sm font-bold text-emerald-800 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
@@ -1312,11 +1317,12 @@ export default function EstimatorApp() {
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
-                                            <td className="px-2 py-2">
-                                              <div className="relative">
+                                            <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Overage %</span>
+                                              <div className="relative w-full">
                                                 <input 
                                                   type="text" 
-                                                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 pr-5 text-center disabled:bg-slate-100 disabled:text-slate-400" 
+                                                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 pr-5 md:text-center disabled:bg-slate-100 disabled:text-slate-400" 
                                                   placeholder="0" 
                                                   value={rowData.overage_pct || ""} 
                                                   disabled={isDisabled} 
@@ -1327,10 +1333,11 @@ export default function EstimatorApp() {
                                                 <span className="absolute right-2 top-1.5 text-xs text-slate-400 font-bold">%</span>
                                               </div>
                                             </td>
-                                            <td className="px-2 py-2">
+                                            <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-emerald-700 uppercase mb-1">Order (Pkg/Divisor)</span>
                                               <input 
                                                 type="text" 
-                                                className="w-full border-2 border-emerald-500 bg-emerald-100 font-bold text-emerald-900 rounded px-2 py-1 text-sm text-center focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300" 
+                                                className="w-full border-2 border-emerald-500 bg-emerald-100 font-bold text-emerald-900 rounded px-2 py-1 text-sm md:text-center focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300" 
                                                 placeholder="0" 
                                                 value={rowData.order_qty || ""} 
                                                 disabled={isDisabled} 
@@ -1339,9 +1346,10 @@ export default function EstimatorApp() {
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
-                                            <td className="px-2 py-2">
+                                            <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-blue-700 uppercase mb-1">QTY (Final to buy)</span>
                                               <div 
-                                                className="relative cursor-pointer" 
+                                                className="relative cursor-pointer w-full" 
                                                 onClick={() => { if(isChecked) openQtyPanel(item.item_id); }} 
                                                 title={qtyTooltip}
                                               >
@@ -1353,16 +1361,22 @@ export default function EstimatorApp() {
                                                 <input 
                                                   type="text" 
                                                   readOnly 
-                                                  className={`w-full border font-bold rounded px-2 py-1.5 text-sm text-center transition-colors outline-none cursor-pointer ${qtyBgClass} disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300 disabled:cursor-not-allowed`} 
+                                                  className={`w-full border font-bold rounded px-2 py-1.5 text-sm md:text-center transition-colors outline-none cursor-pointer ${qtyBgClass} disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300 disabled:cursor-not-allowed`} 
                                                   placeholder="0" 
                                                   value={displayQty} 
                                                   disabled={isDisabled}
                                                 />
+                                                {isError && (
+                                                  <div className="md:hidden text-[10px] text-red-600 mt-1 leading-tight">
+                                                    {rowData.measured_qty}
+                                                  </div>
+                                                )}
                                               </div>
                                             </td>
-                                            <td className="px-2 py-2 text-center text-xs font-bold text-slate-600 uppercase">
+                                            <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">UOM</span>
                                               <select 
-                                                className="w-full bg-transparent hover:bg-slate-100 border border-transparent hover:border-slate-300 focus:border-emerald-500 rounded outline-none cursor-pointer p-1 text-center transition-colors disabled:cursor-not-allowed" 
+                                                className="w-full bg-slate-50 md:bg-transparent hover:bg-slate-100 border border-slate-200 md:border-transparent hover:border-slate-300 focus:border-emerald-500 rounded outline-none cursor-pointer p-1.5 md:p-1 md:text-center transition-colors disabled:cursor-not-allowed text-sm font-bold text-slate-600 uppercase" 
                                                 value={item.uom}
                                                 onChange={(e) => changeUOM(item.item_id, e.target.value)} 
                                                 disabled={isDisabled}
@@ -1373,7 +1387,8 @@ export default function EstimatorApp() {
                                                 <option value="__NEW__" className="font-bold text-blue-600 bg-blue-50">+ New...</option>
                                               </select>
                                             </td>
-                                            <td className="px-2 py-2">
+                                            <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                              <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Reference</span>
                                               <input 
                                                 type="text" 
                                                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
@@ -1385,9 +1400,12 @@ export default function EstimatorApp() {
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
-                                            <td className="px-2 py-2 text-xs text-slate-700 leading-tight border-l border-slate-100 pl-3">
-                                              <span className="font-bold text-blue-700">{item.calc_factor_instruction}</span>
-                                              {item.notes && <><br/><span className="text-slate-500 italic">{item.notes}</span></>}
+                                            <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell text-xs text-slate-700 leading-tight md:border-l md:border-slate-100 md:pl-3">
+                                              <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Rule / Note</span>
+                                              <div>
+                                                <span className="font-bold text-blue-700">{item.calc_factor_instruction}</span>
+                                                {item.notes && <><br/><span className="text-slate-500 italic">{item.notes}</span></>}
+                                              </div>
                                             </td>
                                           </tr>
                                         );

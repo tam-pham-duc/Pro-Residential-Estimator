@@ -38,6 +38,18 @@ export function evaluateCustomFormula(
         parsed = parsed.replace(regex, cv.value.toString());
     });
 
+    // Check for unmatched brackets or unknown variables before evaluating
+    if (parsed.includes('[')) {
+        const match = parsed.match(/\[(.*?)\]/);
+        if (match) {
+            return `ERR: Unknown variable '[${match[1]}]'`;
+        }
+        return "ERR: Missing closing bracket ']'";
+    }
+    if (parsed.includes(']')) {
+        return "ERR: Extra closing bracket ']'";
+    }
+
     const ctx = {
         ROUNDUP: (val: number, decimals: number = 0) => {
             const multiplier = Math.pow(10, decimals);
@@ -70,11 +82,11 @@ export function evaluateCustomFormula(
         });
 
         let result = new Function('ctx', 'return ' + safeParsed)(ctx);
-        if (isNaN(result)) return "ERR: Invalid calculation (NaN)";
+        if (isNaN(result)) return "ERR: Invalid function arguments or calculation resulted in NaN";
         if (!isFinite(result)) return "ERR: Division by zero or infinity";
         return Math.round(result * 100) / 100;
     } catch(e: any) {
-        return `ERR: ${e.message || "Syntax error"}`;
+        return `ERR: ${e.message || "Syntax error in formula"}`;
     }
 }
 
@@ -96,12 +108,16 @@ export function validateCustomFormula(
         parsed = parsed.replace(regex, "1");
     });
 
-    // Check for unmatched brackets
+    // Check for unmatched brackets or unknown variables
     if (parsed.includes('[')) {
-        return { valid: false, error: "Unknown variable or missing closing bracket" };
+        const match = parsed.match(/\[(.*?)\]/);
+        if (match) {
+            return { valid: false, error: `Unknown variable '[${match[1]}]'` };
+        }
+        return { valid: false, error: "Missing closing bracket ']'" };
     }
     if (parsed.includes(']')) {
-        return { valid: false, error: "Extra closing bracket" };
+        return { valid: false, error: "Extra closing bracket ']'" };
     }
 
     const ctx = {
@@ -131,7 +147,7 @@ export function validateCustomFormula(
 
         let result = new Function('ctx', 'return ' + safeParsed)(ctx);
         if (isNaN(result)) {
-            return { valid: false, error: "Formula evaluates to an invalid calculation (NaN)" };
+            return { valid: false, error: "Formula evaluates to an invalid calculation (NaN) or has invalid function arguments" };
         }
         if (!isFinite(result)) {
             return { valid: false, error: "Formula evaluates to division by zero or infinity" };
