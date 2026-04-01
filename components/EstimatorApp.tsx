@@ -922,7 +922,13 @@ export default function EstimatorApp() {
     }
   };
 
-  const openItemModal = (mode: 'add' | 'edit', itemId: string | null = null) => {
+  const openItemModal = (
+    mode: 'add' | 'edit', 
+    itemId: string | null = null,
+    prefillCategory?: string,
+    prefillSubCategory?: string,
+    prefillSubItem1?: string
+  ) => {
     setItemModalMode(mode);
     setIsNewCategory(false);
     setIsNewSubCategory(false);
@@ -942,9 +948,9 @@ export default function EstimatorApp() {
       }
     } else {
       setEditingItemId("");
-      setModCategory(getUniqueVals(catalog, 'category')[0] || "");
-      setModSubCategory("");
-      setModSubItem1("");
+      setModCategory(prefillCategory || getUniqueVals(catalog, 'category')[0] || "");
+      setModSubCategory(prefillSubCategory || "");
+      setModSubItem1(prefillSubItem1 || "");
       setModItemName("");
       setModUOM("");
       setModRule("");
@@ -1230,12 +1236,20 @@ export default function EstimatorApp() {
                     </span>
                     <h2 className="font-bold text-white text-lg tracking-wide uppercase">{category}</h2>
                   </div>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); renameCategory(category); }} 
-                    className="text-slate-400 hover:text-white font-bold text-sm transition flex items-center gap-1"
-                  >
-                    <Edit2 size={14} /> Edit
-                  </button>
+                  <div className="flex items-center gap-4">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); openItemModal('add', null, category); }} 
+                      className="text-slate-400 hover:text-white font-bold text-sm transition flex items-center gap-1"
+                    >
+                      <Plus size={14} /> Add new Sub-Category
+                    </button>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); renameCategory(category); }} 
+                      className="text-slate-400 hover:text-white font-bold text-sm transition flex items-center gap-1"
+                    >
+                      <Edit2 size={14} /> Edit
+                    </button>
+                  </div>
                 </div>
                 
                 <div className={`${isCatCollapsed ? 'hidden' : 'block'} overflow-x-auto pb-4 bg-white`}>
@@ -1255,12 +1269,20 @@ export default function EstimatorApp() {
                             </span>
                             <h3 className="font-bold text-blue-900 text-base uppercase">{subCategory}</h3>
                           </div>
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); renameSubCategory(category, subCategory); }} 
-                            className="text-blue-500 hover:text-blue-800 font-bold text-sm transition flex items-center gap-1"
-                          >
-                            <Edit2 size={14} /> Edit
-                          </button>
+                          <div className="flex items-center gap-4">
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); openItemModal('add', null, category, subCategory); }} 
+                              className="text-blue-500 hover:text-blue-800 font-bold text-sm transition flex items-center gap-1"
+                            >
+                              <Plus size={14} /> Add new Sub-Item Group (L3)
+                            </button>
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); renameSubCategory(category, subCategory); }} 
+                              className="text-blue-500 hover:text-blue-800 font-bold text-sm transition flex items-center gap-1"
+                            >
+                              <Edit2 size={14} /> Edit
+                            </button>
+                          </div>
                         </div>
                         
                         <div className={`${isSubCollapsed ? 'hidden' : 'block'}`}>
@@ -1280,12 +1302,20 @@ export default function EstimatorApp() {
                                     </span>
                                     <h4 className="font-bold text-emerald-800 text-sm">Group: {subItem1}</h4>
                                   </div>
-                                  <button 
-                                    onClick={(e) => { e.stopPropagation(); renameSubItem1(category, subCategory, subItem1); }} 
-                                    className="text-emerald-400 hover:text-emerald-700 font-bold text-xs transition flex items-center gap-1"
-                                  >
-                                    <Edit2 size={12} /> Edit
-                                  </button>
+                                  <div className="flex items-center gap-4">
+                                    <button 
+                                      onClick={(e) => { e.stopPropagation(); openItemModal('add', null, category, subCategory, subItem1); }} 
+                                      className="text-emerald-500 hover:text-emerald-700 font-bold text-xs transition flex items-center gap-1"
+                                    >
+                                      <Plus size={12} /> Add new Material
+                                    </button>
+                                    <button 
+                                      onClick={(e) => { e.stopPropagation(); renameSubItem1(category, subCategory, subItem1); }} 
+                                      className="text-emerald-400 hover:text-emerald-700 font-bold text-xs transition flex items-center gap-1"
+                                    >
+                                      <Edit2 size={12} /> Edit
+                                    </button>
+                                  </div>
                                 </div>
                                 
                                 <div className={`${isSub1Collapsed ? 'hidden' : 'block'}`}>
