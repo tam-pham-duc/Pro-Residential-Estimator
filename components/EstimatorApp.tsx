@@ -225,6 +225,7 @@ export default function EstimatorApp() {
   const [isNewSubItem1, setIsNewSubItem1] = useState(false);
 
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
 
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
@@ -248,7 +249,6 @@ export default function EstimatorApp() {
   useEffect(() => {
     const savedCatalog = localStorage.getItem('userItemCatalog');
     if (savedCatalog) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCatalog(JSON.parse(savedCatalog));
     } else {
        
@@ -369,6 +369,67 @@ export default function EstimatorApp() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo]);
+
+  const handleSelectItem = (itemId: string, checked: boolean) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(itemId);
+      else next.delete(itemId);
+      return next;
+    });
+  };
+
+  const handleSelectAll = (itemIds: string[], checked: boolean) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev);
+      itemIds.forEach(id => {
+        if (checked) next.add(id);
+        else next.delete(id);
+      });
+      return next;
+    });
+  };
+
+  const setScopeForSelected = (inScope: boolean) => {
+    if (selectedItems.size === 0) return;
+    
+    setTakeoffData(prev => {
+      const newData = { ...prev };
+      let changedCount = 0;
+      
+      selectedItems.forEach(itemId => {
+        const item = catalog.find(i => i.item_id === itemId);
+        if (!item) return;
+        
+        if (!newData[itemId]) {
+          let defaultOverage = "";
+          const match = item.calc_factor_instruction.match(/(\d+)%\s*overage/i);
+          if (match) defaultOverage = match[1];
+          newData[itemId] = {
+            in_scope: false, spec: "", qty: "", measured_qty: "",
+            overage_pct: defaultOverage, order_qty: "", evidence: "",
+            qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
+          };
+        }
+        
+        if (newData[itemId].in_scope !== inScope) {
+          newData[itemId] = { ...newData[itemId], in_scope: inScope };
+          
+          if (!newData[itemId].in_scope) {
+            newData[itemId].qty = "";
+            newData[itemId].measured_qty = "";
+            newData[itemId].order_qty = "";
+          }
+          changedCount++;
+        }
+      });
+      
+      if (changedCount > 0) {
+        setTimeout(() => recordHistory(`Marked ${changedCount} items as ${inScope ? 'In Scope' : 'Out of Scope'}`, newData, catalog, projectName, clientName), 0);
+      }
+      return newData;
+    });
+  };
 
   const updateTakeoffData = (itemId: string, field: keyof TakeoffItem, value: any, instruction: string, itemName: string) => {
     setTakeoffData(prev => {
@@ -857,7 +918,6 @@ export default function EstimatorApp() {
         setTimeout(() => recordHistory(`Advanced Edit: ${oldName} -> ${name}`, takeoffData, newCatalog, projectName, clientName), 0);
       }
     } else {
-      // eslint-disable-next-line react-hooks/purity
       const newItem: Item = { item_id: "ITM-" + Date.now(), category: cat, sub_category: subCat, sub_item_1: subItem1, item_name: name, uom: uom, calc_factor_instruction: rule, notes: notes };
       newCatalog.push(newItem);
       setTimeout(() => recordHistory(`Added New Item: ${name}`, takeoffData, newCatalog, projectName, clientName), 0);
@@ -974,8 +1034,8 @@ export default function EstimatorApp() {
               <Save size={16} /> Save Template
             </button>
           </div>
-          <div className="flex-1">
-            <div className="relative max-w-md mx-auto">
+          <div className="flex-1 flex items-center justify-center gap-2">
+            <div className="relative w-full max-w-md">
               <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
               <input 
                 type="text" 
@@ -985,6 +1045,31 @@ export default function EstimatorApp() {
                 className="w-full border border-slate-300 rounded-full pl-9 pr-4 py-2 text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
               />
             </div>
+            {selectedItems.size > 0 && (
+              <div className="flex items-center gap-1">
+                <button 
+                  onClick={() => setScopeForSelected(true)}
+                  className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 px-3 py-2 rounded-l-full text-sm font-bold flex items-center gap-1 whitespace-nowrap transition-colors border border-emerald-200"
+                  title="Mark selected items as In Scope"
+                >
+                  Include ({selectedItems.size})
+                </button>
+                <button 
+                  onClick={() => setScopeForSelected(false)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-r-full text-sm font-bold flex items-center gap-1 whitespace-nowrap transition-colors border border-slate-200 border-l-0"
+                  title="Mark selected items as Out of Scope"
+                >
+                  Exclude
+                </button>
+                <button 
+                  onClick={() => setSelectedItems(new Set())}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-600 p-2 rounded-full text-sm font-bold transition-colors border border-slate-200 ml-1"
+                  title="Clear selection"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2 w-1/4 justify-end text-sm">
             <button 
@@ -1133,6 +1218,15 @@ export default function EstimatorApp() {
                                   <table className="w-full text-left mb-4 max-w-full">
                                     <thead className="text-xs uppercase text-slate-700 bg-slate-100 border-b-2 border-slate-200 hidden md:table-header-group leading-tight">
                                       <tr>
+                                        <th className="px-3 py-2 text-center min-w-[40px] whitespace-nowrap">
+                                          <input 
+                                            type="checkbox" 
+                                            className="w-4 h-4 cursor-pointer accent-indigo-600"
+                                            checked={items.length > 0 && items.every(item => selectedItems.has(item.item_id))}
+                                            onChange={(e) => handleSelectAll(items.map(i => i.item_id), e.target.checked)}
+                                            title="Select all in group"
+                                          />
+                                        </th>
                                         <th className="px-3 py-2 text-center min-w-[60px] whitespace-nowrap">SCOPE<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(in/out)</span></th>
                                         <th className="px-3 py-2 min-w-[200px] font-bold whitespace-nowrap">MATERIAL<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(name)</span></th>
                                         <th className="px-3 py-2 min-w-[120px] font-bold whitespace-nowrap">SPEC<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(details)</span></th>
@@ -1158,6 +1252,14 @@ export default function EstimatorApp() {
 
                                         return (
                                           <tr key={item.item_id} className={`${rowBg} border-b border-slate-200 group`}>
+                                            <td className="px-2 py-2 text-center border-r border-slate-200/50">
+                                              <input 
+                                                type="checkbox" 
+                                                className="w-4 h-4 cursor-pointer accent-indigo-600" 
+                                                checked={selectedItems.has(item.item_id)} 
+                                                onChange={(e) => handleSelectItem(item.item_id, e.target.checked)}
+                                              />
+                                            </td>
                                             <td className="px-2 py-2 text-center">
                                               <input 
                                                 type="checkbox" 
