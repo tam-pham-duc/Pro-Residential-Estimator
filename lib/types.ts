@@ -46,3 +46,14 @@ export type Job = {
   lastSaved: string;
   customVariables?: CustomVariable[];
 };
+
+export type ProjectTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  type: 'global' | 'personal';
+  catalog: Item[];
+  takeoffData: Record<string, TakeoffItem>;
+  customVariables: CustomVariable[];
+  createdAt: string;
+};

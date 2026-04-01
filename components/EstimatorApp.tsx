@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals } from '@/lib/estimator-utils';
-import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable } from '@/lib/types';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
@@ -226,8 +226,24 @@ export default function EstimatorApp() {
 
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
 
+  const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [newProjectModalOpen, setNewProjectModalOpen] = useState(false);
+  const [newProjectData, setNewProjectData] = useState({ name: '', client: '', description: '', templateId: '' });
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formulaInputRef = useRef<ReactCodeMirrorRef>(null);
+  
+  const actionHistoryRef = useRef<HistoryRecord[]>([]);
+  const historyIndexRef = useRef<number>(0);
+
+  useEffect(() => {
+    actionHistoryRef.current = actionHistory;
+  }, [actionHistory]);
+
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
 
   useEffect(() => {
     const savedCatalog = localStorage.getItem('userItemCatalog');
@@ -240,9 +256,13 @@ export default function EstimatorApp() {
     }
 
     const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
-     
     setSavedJobs(jobs);
-     
+    
+    const savedTemplates = localStorage.getItem('projectTemplates');
+    if (savedTemplates) {
+      setTemplates(JSON.parse(savedTemplates));
+    }
+
     setCurrentJobId("JOB-" + Date.now());
      
     setIsMounted(true);
@@ -258,19 +278,38 @@ export default function EstimatorApp() {
       clientName: newClient,
       customVariables: JSON.parse(JSON.stringify(newCustomVars))
     };
+    
+    // Prevent duplicate history records using refs to ensure we have the latest state
+    const currentHistory = actionHistoryRef.current;
+    const currentIndex = historyIndexRef.current;
+    
+    if (currentHistory.length > 0 && currentIndex < currentHistory.length) {
+      const currentRecord = currentHistory[currentIndex];
+      if (
+        JSON.stringify(currentRecord.dataState) === JSON.stringify(snapshot.dataState) &&
+        JSON.stringify(currentRecord.catalogState) === JSON.stringify(snapshot.catalogState) &&
+        currentRecord.projectName === snapshot.projectName &&
+        currentRecord.clientName === snapshot.clientName &&
+        JSON.stringify(currentRecord.customVariables) === JSON.stringify(snapshot.customVariables)
+      ) {
+        return; // No changes detected
+      }
+    }
+
     setActionHistory(prev => {
-      const pastHistory = prev.slice(historyIndex);
+      const pastHistory = prev.slice(currentIndex);
       const newHistory = [snapshot, ...pastHistory];
       if (newHistory.length > 50) newHistory.pop();
       return newHistory;
     });
+    
     setHistoryIndex(0);
   };
 
   const canUndo = historyIndex < actionHistory.length - 1;
   const canRedo = historyIndex > 0;
 
-  const undo = () => {
+  const undo = useCallback(() => {
     if (canUndo) {
       const newIndex = historyIndex + 1;
       const record = actionHistory[newIndex];
@@ -284,9 +323,9 @@ export default function EstimatorApp() {
       if (record.customVariables) setCustomVariables(record.customVariables);
       setHistoryIndex(newIndex);
     }
-  };
+  }, [canUndo, historyIndex, actionHistory]);
 
-  const redo = () => {
+  const redo = useCallback(() => {
     if (canRedo) {
       const newIndex = historyIndex - 1;
       const record = actionHistory[newIndex];
@@ -300,7 +339,36 @@ export default function EstimatorApp() {
       if (record.customVariables) setCustomVariables(record.customVariables);
       setHistoryIndex(newIndex);
     }
-  };
+  }, [canRedo, historyIndex, actionHistory]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in an input, textarea, or contenteditable
+      const activeElement = document.activeElement;
+      if (activeElement) {
+        const tagName = activeElement.tagName.toLowerCase();
+        if (tagName === 'input' || tagName === 'textarea' || (activeElement as HTMLElement).isContentEditable) {
+          return;
+        }
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          redo();
+        } else {
+          e.preventDefault();
+          undo();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo]);
 
   const updateTakeoffData = (itemId: string, field: keyof TakeoffItem, value: any, instruction: string, itemName: string) => {
     setTakeoffData(prev => {
@@ -347,7 +415,9 @@ export default function EstimatorApp() {
         ? (finalValue ? `Added Scope: ${itemName}` : `Removed Scope: ${itemName}`) 
         : `Updated ${field} for ${itemName}`;
       
-      setTimeout(() => recordHistory(actionDesc, newData, catalog, projectName, clientName), 0);
+      if (field === 'in_scope') {
+        setTimeout(() => recordHistory(actionDesc, newData, catalog, projectName, clientName), 0);
+      }
       return newData;
     });
   };
@@ -467,16 +537,62 @@ export default function EstimatorApp() {
     alert("Job Saved Successfully!");
   };
 
+  const saveAsTemplate = () => {
+    const templateName = window.prompt("Enter template name:");
+    if (!templateName) return;
+    
+    const templateDesc = window.prompt("Enter template description (optional):") || "";
+    const isGlobal = window.confirm("Save as Global Template? (Cancel for Personal)");
+
+    const newTemplate: ProjectTemplate = {
+      id: "TPL-" + Date.now(),
+      name: templateName,
+      description: templateDesc,
+      type: isGlobal ? 'global' : 'personal',
+      catalog: catalog,
+      takeoffData: takeoffData,
+      customVariables: customVariables,
+      createdAt: new Date().toISOString()
+    };
+
+    const newTemplates = [...templates, newTemplate];
+    setTemplates(newTemplates);
+    localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
+    alert("Template saved successfully!");
+  };
+
+  const createNewProject = () => {
+    const newJobId = "JOB-" + Date.now();
+    setCurrentJobId(newJobId);
+    setProjectName(newProjectData.name);
+    setClientName(newProjectData.client);
+    
+    if (newProjectData.templateId) {
+      const tpl = templates.find(t => t.id === newProjectData.templateId);
+      if (tpl) {
+        setCatalog(tpl.catalog);
+        setTakeoffData(tpl.takeoffData);
+        setCustomVariables(tpl.customVariables);
+        setActionHistory([]);
+        setHistoryIndex(0);
+        setNewProjectModalOpen(false);
+        return;
+      }
+    }
+    
+    // Blank project
+    setTakeoffData({});
+    setActionHistory([]);
+    setHistoryIndex(0);
+    setCustomVariables([]);
+    setNewProjectModalOpen(false);
+  };
+
   const loadJobFromSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedId = e.target.value;
     if (!selectedId) {
-      setCurrentJobId("JOB-" + Date.now());
-      setTakeoffData({});
-      setActionHistory([]);
-      setHistoryIndex(0);
-      setProjectName("");
-      setClientName("");
-      setCustomVariables([]);
+      setNewProjectData({ name: '', client: '', description: '', templateId: '' });
+      setNewProjectModalOpen(true);
       return;
     }
     const jobData = savedJobs[selectedId];
@@ -603,6 +719,36 @@ export default function EstimatorApp() {
     setQtyPanelOpen(true);
   };
 
+  const closeQtyPanel = () => {
+    const itemInfo = catalog.find(i => i.item_id === qtyPanelItemId);
+    if (!itemInfo) return;
+
+    setTakeoffData(prev => {
+      const currentData = prev[qtyPanelItemId] || {};
+      const currentFormula = currentData.custom_formula || DEFAULT_QTY_FORMULA;
+      const currentMode = currentData.qty_mode || 'auto';
+
+      if (currentFormula === customFormula && currentMode === qtyMode) {
+        return prev;
+      }
+
+      const newData = { ...prev };
+      if (!newData[qtyPanelItemId]) {
+        newData[qtyPanelItemId] = {
+          in_scope: false, spec: "", qty: "", measured_qty: "",
+          overage_pct: "", order_qty: "", evidence: "",
+          qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
+        };
+      }
+      newData[qtyPanelItemId].custom_formula = customFormula;
+      newData[qtyPanelItemId].qty_mode = qtyMode;
+      
+      setTimeout(() => recordHistory(`Autosaved Formula for ${itemInfo.item_name}`, newData, catalog, projectName, clientName), 0);
+      return newData;
+    });
+    setQtyPanelOpen(false);
+  };
+
   const saveQtyPanel = () => {
     const itemInfo = catalog.find(i => i.item_id === qtyPanelItemId);
     if (!itemInfo) return;
@@ -711,6 +857,7 @@ export default function EstimatorApp() {
         setTimeout(() => recordHistory(`Advanced Edit: ${oldName} -> ${name}`, takeoffData, newCatalog, projectName, clientName), 0);
       }
     } else {
+      // eslint-disable-next-line react-hooks/purity
       const newItem: Item = { item_id: "ITM-" + Date.now(), category: cat, sub_category: subCat, sub_item_1: subItem1, item_name: name, uom: uom, calc_factor_instruction: rule, notes: notes };
       newCatalog.push(newItem);
       setTimeout(() => recordHistory(`Added New Item: ${name}`, takeoffData, newCatalog, projectName, clientName), 0);
@@ -822,6 +969,9 @@ export default function EstimatorApp() {
             </select>
             <button onClick={saveCurrentJob} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1">
               <Save size={16} /> Save
+            </button>
+            <button onClick={saveAsTemplate} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
+              <Save size={16} /> Save Template
             </button>
           </div>
           <div className="flex-1">
@@ -1038,6 +1188,7 @@ export default function EstimatorApp() {
                                                 value={rowData.spec || ""} 
                                                 disabled={isDisabled} 
                                                 onChange={(e) => updateTakeoffData(item.item_id, 'spec', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                onBlur={() => recordHistory(`Updated spec for ${item.item_name}`)}
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
@@ -1049,6 +1200,7 @@ export default function EstimatorApp() {
                                                 value={rowData.qty || ""} 
                                                 disabled={isDisabled} 
                                                 onChange={(e) => updateTakeoffData(item.item_id, 'qty', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                onBlur={() => recordHistory(`Updated qty for ${item.item_name}`)}
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
@@ -1061,6 +1213,7 @@ export default function EstimatorApp() {
                                                   value={rowData.overage_pct || ""} 
                                                   disabled={isDisabled} 
                                                   onChange={(e) => updateTakeoffData(item.item_id, 'overage_pct', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                  onBlur={() => recordHistory(`Updated overage for ${item.item_name}`)}
                                                   onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                                 />
                                                 <span className="absolute right-2 top-1.5 text-xs text-slate-400 font-bold">%</span>
@@ -1074,6 +1227,7 @@ export default function EstimatorApp() {
                                                 value={rowData.order_qty || ""} 
                                                 disabled={isDisabled} 
                                                 onChange={(e) => updateTakeoffData(item.item_id, 'order_qty', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                onBlur={() => recordHistory(`Updated order qty for ${item.item_name}`)}
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
@@ -1119,6 +1273,7 @@ export default function EstimatorApp() {
                                                 value={rowData.evidence || ""} 
                                                 disabled={isDisabled} 
                                                 onChange={(e) => updateTakeoffData(item.item_id, 'evidence', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                onBlur={() => recordHistory(`Updated evidence for ${item.item_name}`)}
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
@@ -1365,8 +1520,8 @@ export default function EstimatorApp() {
 
       {/* QTY Panel Modal */}
       {qtyPanelOpen && (
-        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl p-6 border-t-4 border-emerald-500">
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-50" onClick={closeQtyPanel}>
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl p-6 border-t-4 border-emerald-500" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold">QTY Calculation Engine</h2>
               <span className="text-sm font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded">
@@ -1551,8 +1706,8 @@ export default function EstimatorApp() {
             )}
             
             <div className="mt-6 flex justify-end gap-3 pt-4 border-t">
-              <button onClick={() => setQtyPanelOpen(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-100 rounded transition">Cancel</button>
-              <button onClick={saveQtyPanel} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold transition shadow-sm">Save</button>
+              <button onClick={closeQtyPanel} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-100 rounded transition">Close</button>
+              <button onClick={saveQtyPanel} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold transition shadow-sm">Apply & Calculate</button>
             </div>
           </div>
         </div>
@@ -1720,6 +1875,76 @@ export default function EstimatorApp() {
                 <button onClick={() => setItemModalOpen(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-100 rounded transition">Cancel</button>
                 <button onClick={saveItem} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold transition shadow-sm">Save</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Project Modal */}
+      {newProjectModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-md p-6 border-t-4 border-emerald-500">
+            <h2 className="text-xl font-bold mb-4">Create New Project</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Project Name</label>
+                <input 
+                  type="text" 
+                  value={newProjectData.name}
+                  onChange={(e) => setNewProjectData({...newProjectData, name: e.target.value})}
+                  className="w-full border border-slate-300 p-2 rounded focus:ring-2 focus:ring-emerald-200 outline-none"
+                  placeholder="e.g. Acme Corp HQ"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Client Name</label>
+                <input 
+                  type="text" 
+                  value={newProjectData.client}
+                  onChange={(e) => setNewProjectData({...newProjectData, client: e.target.value})}
+                  className="w-full border border-slate-300 p-2 rounded focus:ring-2 focus:ring-emerald-200 outline-none"
+                  placeholder="e.g. Acme Corp"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Description</label>
+                <textarea 
+                  value={newProjectData.description}
+                  onChange={(e) => setNewProjectData({...newProjectData, description: e.target.value})}
+                  className="w-full border border-slate-300 p-2 rounded focus:ring-2 focus:ring-emerald-200 outline-none"
+                  placeholder="Project details..."
+                  rows={2}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Start from Template</label>
+                <select 
+                  value={newProjectData.templateId}
+                  onChange={(e) => setNewProjectData({...newProjectData, templateId: e.target.value})}
+                  className="w-full border border-slate-300 p-2 rounded focus:ring-2 focus:ring-emerald-200 outline-none"
+                >
+                  <option value="">-- Blank Project --</option>
+                  {templates.length > 0 && <optgroup label="Global Templates">
+                    {templates.filter(t => t.type === 'global').map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </optgroup>}
+                  {templates.length > 0 && <optgroup label="Personal Templates">
+                    {templates.filter(t => t.type === 'personal').map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </optgroup>}
+                </select>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3 pt-4 border-t">
+              <button onClick={() => setNewProjectModalOpen(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-100 rounded transition">Cancel</button>
+              <button onClick={createNewProject} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold transition shadow-sm">Create Project</button>
             </div>
           </div>
         </div>
