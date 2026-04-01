@@ -1246,9 +1246,15 @@ export default function EstimatorApp() {
                                         const isDisabled = !isChecked;
                                         const rowBg = isChecked ? "bg-emerald-50/40" : "hover:bg-slate-50";
 
-                                        const qtyBgClass = rowData.qty_mode === 'manual' 
-                                          ? "border-amber-400 bg-amber-50 text-amber-900 focus:border-amber-600" 
-                                          : "border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 focus:border-blue-500";
+                                        const isError = typeof rowData.measured_qty === 'string' && rowData.measured_qty.startsWith('ERR');
+                                        const displayQty = isError ? 'ERR' : (rowData.measured_qty || '');
+                                        const qtyTooltip = isError ? rowData.measured_qty : "Click to config formula or override";
+
+                                        const qtyBgClass = isError
+                                          ? "border-red-400 bg-red-50 text-red-900 focus:border-red-600"
+                                          : rowData.qty_mode === 'manual' 
+                                            ? "border-amber-400 bg-amber-50 text-amber-900 focus:border-amber-600" 
+                                            : "border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 focus:border-blue-500";
 
                                         return (
                                           <tr key={item.item_id} className={`${rowBg} border-b border-slate-200 group`}>
@@ -1337,19 +1343,19 @@ export default function EstimatorApp() {
                                               <div 
                                                 className="relative cursor-pointer" 
                                                 onClick={() => { if(isChecked) openQtyPanel(item.item_id); }} 
-                                                title="Click to config formula or override"
+                                                title={qtyTooltip}
                                               >
                                                 {rowData.qty_mode === 'manual' ? (
                                                   <Hand size={12} className="absolute left-2 top-2 text-amber-600" />
                                                 ) : (
-                                                  <Calculator size={12} className="absolute left-1 top-2 text-emerald-600" />
+                                                  <Calculator size={12} className={`absolute left-1 top-2 ${isError ? 'text-red-600' : 'text-emerald-600'}`} />
                                                 )}
                                                 <input 
                                                   type="text" 
                                                   readOnly 
                                                   className={`w-full border font-bold rounded px-2 py-1.5 text-sm text-center transition-colors outline-none cursor-pointer ${qtyBgClass} disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300 disabled:cursor-not-allowed`} 
                                                   placeholder="0" 
-                                                  value={rowData.measured_qty || ''} 
+                                                  value={displayQty} 
                                                   disabled={isDisabled}
                                                 />
                                               </div>
@@ -1784,17 +1790,21 @@ export default function EstimatorApp() {
                   </ul>
                 </div>
 
-                <div className="bg-blue-50 p-3 rounded text-sm font-bold text-blue-800">
-                  Preview: <span>
-                    {evaluateCustomFormula(
-                      customFormula, 
-                      takeoffData[qtyPanelItemId]?.qty || 0, 
-                      takeoffData[qtyPanelItemId]?.overage_pct || 0, 
-                      takeoffData[qtyPanelItemId]?.order_qty || 1,
-                      customVariables
-                    ).toString()}
-                  </span>
-                </div>
+                {(() => {
+                  const previewResult = evaluateCustomFormula(
+                    customFormula, 
+                    takeoffData[qtyPanelItemId]?.qty || 0, 
+                    takeoffData[qtyPanelItemId]?.overage_pct || 0, 
+                    takeoffData[qtyPanelItemId]?.order_qty || 1,
+                    customVariables
+                  );
+                  const isError = typeof previewResult === 'string' && previewResult.startsWith('ERR');
+                  return (
+                    <div className={`p-3 rounded text-sm font-bold ${isError ? 'bg-red-50 text-red-800' : 'bg-blue-50 text-blue-800'}`}>
+                      Preview: <span>{previewResult.toString()}</span>
+                    </div>
+                  );
+                })()}
               </div>
             ) : (
               <div>

@@ -70,9 +70,11 @@ export function evaluateCustomFormula(
         });
 
         let result = new Function('ctx', 'return ' + safeParsed)(ctx);
-        return (isNaN(result) || !isFinite(result)) ? "ERR" : Math.round(result * 100) / 100;
-    } catch(e) {
-        return "ERR";
+        if (isNaN(result)) return "ERR: Invalid calculation (NaN)";
+        if (!isFinite(result)) return "ERR: Division by zero or infinity";
+        return Math.round(result * 100) / 100;
+    } catch(e: any) {
+        return `ERR: ${e.message || "Syntax error"}`;
     }
 }
 
@@ -128,8 +130,11 @@ export function validateCustomFormula(
         });
 
         let result = new Function('ctx', 'return ' + safeParsed)(ctx);
-        if (isNaN(result) || !isFinite(result)) {
-            return { valid: false, error: "Formula evaluates to an invalid number" };
+        if (isNaN(result)) {
+            return { valid: false, error: "Formula evaluates to an invalid calculation (NaN)" };
+        }
+        if (!isFinite(result)) {
+            return { valid: false, error: "Formula evaluates to division by zero or infinity" };
         }
         return { valid: true };
     } catch(e: any) {
