@@ -7,7 +7,7 @@ import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate 
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
-  Undo2, Redo2
+  Undo2, Redo2, Copy
 } from 'lucide-react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
@@ -125,6 +125,7 @@ export default function EstimatorApp() {
   const [clientName, setClientName] = useState("");
   const [currentJobId, setCurrentJobId] = useState("");
   const [savedJobs, setSavedJobs] = useState<Record<string, Job>>({});
+  const [defaultOveragePct, setDefaultOveragePct] = useState<string>("0");
 
   // Modals state
   const [qtyPanelOpen, setQtyPanelOpen] = useState(false);
@@ -261,6 +262,11 @@ export default function EstimatorApp() {
     const savedTemplates = localStorage.getItem('projectTemplates');
     if (savedTemplates) {
       setTemplates(JSON.parse(savedTemplates));
+    }
+
+    const savedDefaultOverage = localStorage.getItem('defaultOveragePct');
+    if (savedDefaultOverage) {
+      setDefaultOveragePct(savedDefaultOverage);
     }
 
     setCurrentJobId("JOB-" + Date.now());
@@ -431,6 +437,34 @@ export default function EstimatorApp() {
     });
   };
 
+  const handleDefaultOverageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setDefaultOveragePct(val);
+    localStorage.setItem('defaultOveragePct', val);
+
+    setTakeoffData(prev => {
+      const newData = { ...prev };
+      let hasChanges = false;
+      for (const itemId in newData) {
+        if (newData[itemId].qty_mode !== 'manual' && newData[itemId].overage_pct === "") {
+          const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+          const newQty = evaluateCustomFormula(
+            formula,
+            newData[itemId].qty,
+            val,
+            newData[itemId].order_qty,
+            customVariables
+          ).toString();
+          if (newData[itemId].measured_qty !== newQty) {
+            newData[itemId] = { ...newData[itemId], measured_qty: newQty };
+            hasChanges = true;
+          }
+        }
+      }
+      return hasChanges ? newData : prev;
+    });
+  };
+
   const updateTakeoffData = (itemId: string, field: keyof TakeoffItem, value: any, instruction: string, itemName: string) => {
     setTakeoffData(prev => {
       const newData = { ...prev };
@@ -465,7 +499,7 @@ export default function EstimatorApp() {
           newData[itemId].measured_qty = evaluateCustomFormula(
             formula,
             newData[itemId].qty,
-            newData[itemId].overage_pct,
+            newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
             newData[itemId].order_qty,
             customVariables
           ).toString();
@@ -613,6 +647,7 @@ export default function EstimatorApp() {
       catalog: catalog,
       takeoffData: takeoffData,
       customVariables: customVariables,
+      defaultOveragePct: defaultOveragePct,
       createdAt: new Date().toISOString()
     };
 
@@ -634,6 +669,10 @@ export default function EstimatorApp() {
         setCatalog(tpl.catalog);
         setTakeoffData(tpl.takeoffData);
         setCustomVariables(tpl.customVariables);
+        if (tpl.defaultOveragePct !== undefined) {
+          setDefaultOveragePct(tpl.defaultOveragePct);
+          localStorage.setItem('defaultOveragePct', tpl.defaultOveragePct);
+        }
         setActionHistory([]);
         setHistoryIndex(0);
         setNewProjectModalOpen(false);
@@ -646,7 +685,22 @@ export default function EstimatorApp() {
     setActionHistory([]);
     setHistoryIndex(0);
     setCustomVariables([]);
+    setDefaultOveragePct("");
+    localStorage.removeItem('defaultOveragePct');
     setNewProjectModalOpen(false);
+  };
+
+  const deleteTemplate = (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this template?")) return;
+    const newTemplates = templates.filter(t => t.id !== id);
+    setTemplates(newTemplates);
+    localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
+  };
+
+  const loadTemplate = (id: string) => {
+    setNewProjectData({ name: '', client: '', description: '', templateId: id });
+    setTemplateModalOpen(false);
+    setNewProjectModalOpen(true);
   };
 
   const loadJobFromSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -721,6 +775,7 @@ export default function EstimatorApp() {
       jobId: currentJobId,
       projectName: projName,
       clientName: clientName,
+      defaultOveragePct: defaultOveragePct,
       exportDate: new Date().toISOString(),
       takeoffData: takeoffData,
       historyLog: actionHistory,
@@ -754,6 +809,10 @@ export default function EstimatorApp() {
           }
           setProjectName(importedData.projectName || "");
           setClientName(importedData.clientName || "");
+          if (importedData.defaultOveragePct !== undefined) {
+            setDefaultOveragePct(importedData.defaultOveragePct);
+            localStorage.setItem('defaultOveragePct', importedData.defaultOveragePct);
+          }
           setCustomVariables(importedData.customVariables || []);
           
           setTimeout(() => recordHistory("Imported Job from JSON File", importedData.takeoffData, importedData.catalog || catalog, importedData.projectName, importedData.clientName, importedData.customVariables || []), 0);
@@ -794,15 +853,14 @@ export default function EstimatorApp() {
       }
 
       const newData = { ...prev };
-      if (!newData[qtyPanelItemId]) {
-        newData[qtyPanelItemId] = {
-          in_scope: false, spec: "", qty: "", measured_qty: "",
-          overage_pct: "", order_qty: "", evidence: "",
-          qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
-        };
-      }
-      newData[qtyPanelItemId].custom_formula = customFormula;
-      newData[qtyPanelItemId].qty_mode = qtyMode;
+      const currentItem = newData[qtyPanelItemId] || {
+        in_scope: false, spec: "", qty: "", measured_qty: "",
+        overage_pct: "", order_qty: "", evidence: "",
+        qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
+      };
+      
+      const updatedItem = { ...currentItem, custom_formula: customFormula, qty_mode: qtyMode };
+      newData[qtyPanelItemId] = updatedItem;
       
       setTimeout(() => recordHistory(`Autosaved Formula for ${itemInfo.item_name}`, newData, catalog, projectName, clientName), 0);
       return newData;
@@ -816,28 +874,28 @@ export default function EstimatorApp() {
 
     setTakeoffData(prev => {
       const newData = { ...prev };
-      if (!newData[qtyPanelItemId]) {
-        newData[qtyPanelItemId] = {
-          in_scope: false, spec: "", qty: "", measured_qty: "",
-          overage_pct: "", order_qty: "", evidence: "",
-          qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
-        };
-      }
+      const currentItem = newData[qtyPanelItemId] || {
+        in_scope: false, spec: "", qty: "", measured_qty: "",
+        overage_pct: "", order_qty: "", evidence: "",
+        qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
+      };
 
-      newData[qtyPanelItemId].qty_mode = qtyMode;
+      const updatedItem = { ...currentItem, qty_mode: qtyMode };
 
       if (qtyMode === 'auto') {
-        newData[qtyPanelItemId].custom_formula = customFormula;
-        newData[qtyPanelItemId].measured_qty = evaluateCustomFormula(
+        updatedItem.custom_formula = customFormula;
+        updatedItem.measured_qty = evaluateCustomFormula(
           customFormula,
-          newData[qtyPanelItemId].qty,
-          newData[qtyPanelItemId].overage_pct,
-          newData[qtyPanelItemId].order_qty,
+          updatedItem.qty,
+          updatedItem.overage_pct !== "" ? updatedItem.overage_pct : defaultOveragePct,
+          updatedItem.order_qty,
           customVariables
         ).toString();
+        newData[qtyPanelItemId] = updatedItem;
         setTimeout(() => recordHistory(`Updated Auto Formula for ${itemInfo.item_name}`, newData, catalog, projectName, clientName), 0);
       } else {
-        newData[qtyPanelItemId].measured_qty = manualQty;
+        updatedItem.measured_qty = manualQty;
+        newData[qtyPanelItemId] = updatedItem;
         setTimeout(() => recordHistory(`Set Manual QTY Override for ${itemInfo.item_name}`, newData, catalog, projectName, clientName), 0);
       }
 
@@ -1033,6 +1091,9 @@ export default function EstimatorApp() {
             <button onClick={saveAsTemplate} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
               <Save size={16} /> Save Template
             </button>
+            <button onClick={() => setTemplateModalOpen(true)} className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
+              <Copy size={16} /> Templates
+            </button>
           </div>
           <div className="w-full md:flex-1 flex flex-col md:flex-row items-center justify-center gap-2">
             <div className="relative w-full md:max-w-md">
@@ -1130,6 +1191,19 @@ export default function EstimatorApp() {
               onBlur={() => recordHistory('Updated Client')}
               className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
             />
+          </div>
+          <div className="w-full md:w-48">
+            <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Default Overage %</label>
+            <div className="relative">
+              <input 
+                type="text" 
+                value={defaultOveragePct}
+                onChange={handleDefaultOverageChange}
+                onBlur={() => recordHistory('Updated Default Overage %')}
+                className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none pr-8"
+              />
+              <span className="absolute right-3 top-2.5 text-slate-400 font-bold">%</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1323,7 +1397,7 @@ export default function EstimatorApp() {
                                                 <input 
                                                   type="text" 
                                                   className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 pr-5 md:text-center disabled:bg-slate-100 disabled:text-slate-400" 
-                                                  placeholder="0" 
+                                                  placeholder={defaultOveragePct || "0"} 
                                                   value={rowData.overage_pct || ""} 
                                                   disabled={isDisabled} 
                                                   onChange={(e) => updateTakeoffData(item.item_id, 'overage_pct', e.target.value, item.calc_factor_instruction, item.item_name)} 
@@ -1525,12 +1599,12 @@ export default function EstimatorApp() {
                           const newQty = evaluateCustomFormula(
                             formula,
                             newData[itemId].qty,
-                            newData[itemId].overage_pct,
+                            newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
                             newData[itemId].order_qty,
                             newVars
                           ).toString();
                           if (newData[itemId].measured_qty !== newQty) {
-                            newData[itemId].measured_qty = newQty;
+                            newData[itemId] = { ...newData[itemId], measured_qty: newQty };
                             hasChanges = true;
                           }
                         }
@@ -1606,12 +1680,12 @@ export default function EstimatorApp() {
                                       const newQty = evaluateCustomFormula(
                                         formula,
                                         newData[itemId].qty,
-                                        newData[itemId].overage_pct,
+                                        newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
                                         newData[itemId].order_qty,
                                         newVars
                                       ).toString();
                                       if (newData[itemId].measured_qty !== newQty) {
-                                        newData[itemId].measured_qty = newQty;
+                                        newData[itemId] = { ...newData[itemId], measured_qty: newQty };
                                         hasChanges = true;
                                       }
                                     }
@@ -1812,7 +1886,7 @@ export default function EstimatorApp() {
                   const previewResult = evaluateCustomFormula(
                     customFormula, 
                     takeoffData[qtyPanelItemId]?.qty || 0, 
-                    takeoffData[qtyPanelItemId]?.overage_pct || 0, 
+                    takeoffData[qtyPanelItemId]?.overage_pct !== "" && takeoffData[qtyPanelItemId]?.overage_pct !== undefined ? takeoffData[qtyPanelItemId]?.overage_pct : defaultOveragePct, 
                     takeoffData[qtyPanelItemId]?.order_qty || 1,
                     customVariables
                   );
@@ -2075,6 +2149,65 @@ export default function EstimatorApp() {
             <div className="mt-6 flex justify-end gap-3 pt-4 border-t">
               <button onClick={() => setNewProjectModalOpen(false)} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-100 rounded transition">Cancel</button>
               <button onClick={createNewProject} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold transition shadow-sm">Create Project</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Template Modal */}
+      {templateModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-60 flex justify-center items-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-3xl p-6 max-h-[80vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Project Templates</h2>
+              <button onClick={() => setTemplateModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="overflow-y-auto flex-1 border rounded p-4 bg-slate-50">
+              {templates.length === 0 ? (
+                <div className="text-center py-8 text-slate-500">
+                  <FileJson size={48} className="mx-auto mb-3 opacity-20" />
+                  <p>No templates saved yet.</p>
+                  <p className="text-sm mt-1">Save your current project as a template to see it here.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {templates.map(t => (
+                    <div key={t.id} className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow flex flex-col">
+                      <div className="flex justify-between items-start mb-2">
+                        <h3 className="font-bold text-lg text-slate-800">{t.name}</h3>
+                        <span className={`text-xs px-2 py-1 rounded-full font-bold ${t.type === 'global' ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                          {t.type === 'global' ? 'Global' : 'Personal'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-600 mb-4 flex-1">{t.description || "No description provided."}</p>
+                      
+                      <div className="flex justify-between items-center mt-auto pt-3 border-t border-slate-100">
+                        <span className="text-xs text-slate-400">
+                          {new Date(t.createdAt).toLocaleDateString()}
+                        </span>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => deleteTemplate(t.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition"
+                            title="Delete Template"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                          <button 
+                            onClick={() => loadTemplate(t.id)}
+                            className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 px-3 py-1.5 rounded text-sm font-bold transition"
+                          >
+                            Use Template
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

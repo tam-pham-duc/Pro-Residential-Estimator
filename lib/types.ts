@@ -55,5 +55,6 @@ export type ProjectTemplate = {
   catalog: Item[];
   takeoffData: Record<string, TakeoffItem>;
   customVariables: CustomVariable[];
+  defaultOveragePct?: string;
   createdAt: string;
 };
