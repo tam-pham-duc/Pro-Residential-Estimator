@@ -7,7 +7,7 @@ import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate,
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
-  Undo2, Redo2, Copy, Users, Folder
+  Undo2, Redo2, Copy, Users, Folder, BookOpen
 } from 'lucide-react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
@@ -200,7 +200,7 @@ export default function EstimatorApp() {
   // Modals state
   const [qtyPanelOpen, setQtyPanelOpen] = useState(false);
   const [qtyPanelItemId, setQtyPanelItemId] = useState("");
-  const [qtyMode, setQtyMode] = useState<'auto' | 'manual'>('auto');
+  const [qtyMode, setQtyMode] = useState<'auto' | 'manual' | 'guide'>('auto');
   const [customFormula, setCustomFormula] = useState("");
   const [manualQty, setManualQty] = useState("");
   const [customVariables, setCustomVariables] = useState<CustomVariable[]>([]);
@@ -219,7 +219,7 @@ export default function EstimatorApp() {
   const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
 
-  const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(false);
+  const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(true);
   const [editingColumn, setEditingColumn] = useState<DynamicColumn | null>(null);
   const [colScopeL1, setColScopeL1] = useState("");
   const [colScopeL2, setColScopeL2] = useState("");
@@ -320,8 +320,9 @@ export default function EstimatorApp() {
       // Branch-scoped filtering
       let isRelevant = true;
       if (col.scope === 'category' && col.category && col.category !== item.category) isRelevant = false;
-      if (col.scope === 'subcategory' && (col.category !== item.category || col.subCategory !== item.sub_category)) isRelevant = false;
-      if (col.scope === 'itemgroup' && (col.category !== item.category || col.subCategory !== item.sub_category || col.itemGroup !== (item.sub_item_1 || ''))) isRelevant = false;
+      if (col.scope === 'subcategory' && (col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category))) isRelevant = false;
+      if (col.scope === 'itemgroup' && (col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category) || (col.itemGroup && col.itemGroup !== (item.sub_item_1 || '')))) isRelevant = false;
+      if (col.scope === 'material' && (col.category && col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category) || (col.itemGroup && col.itemGroup !== (item.sub_item_1 || '')))) isRelevant = false;
       
       if (isRelevant && col.defaultValue !== undefined && col.defaultValue !== '') {
         // Convert to number if it's a number type
@@ -507,6 +508,13 @@ export default function EstimatorApp() {
       } catch (e) {}
     }
 
+    const savedDynamicColumns = localStorage.getItem('userDynamicColumns');
+    if (savedDynamicColumns) {
+      try {
+        setDynamicColumns(JSON.parse(savedDynamicColumns));
+      } catch (e) {}
+    }
+
     const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
     setSavedJobs(jobs);
     
@@ -524,6 +532,12 @@ export default function EstimatorApp() {
      
     setIsMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (isMounted) {
+      localStorage.setItem('userDynamicColumns', JSON.stringify(dynamicColumns));
+    }
+  }, [dynamicColumns, isMounted]);
 
   const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaTemplates = formulaTemplates, newDataTables = dataTables) => {
     const snapshot: HistoryRecord = {
@@ -1519,7 +1533,8 @@ export default function EstimatorApp() {
         qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
       };
       
-      const updatedItem = { ...currentItem, custom_formula: customFormula, qty_mode: qtyMode };
+      const updatedMode = qtyMode === 'guide' ? currentMode : qtyMode;
+      const updatedItem = { ...currentItem, custom_formula: customFormula, qty_mode: updatedMode };
       newData[qtyPanelItemId] = updatedItem;
       
       setTimeout(() => recordHistory(`Autosaved Formula for ${itemInfo.item_name}`, newData, catalog, projectName, clientName), 0);
@@ -1534,15 +1549,19 @@ export default function EstimatorApp() {
 
     setTakeoffData(prev => {
       const newData = { ...prev };
+      const currentData = prev[qtyPanelItemId] || {};
+      const currentMode = currentData.qty_mode || 'auto';
+      const updatedMode = qtyMode === 'guide' ? currentMode : qtyMode;
+
       const currentItem = newData[qtyPanelItemId] || {
         in_scope: false, spec: "", qty: "", measured_qty: "",
         overage_pct: "", order_qty: "", evidence: "",
         qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
       };
 
-      const updatedItem = { ...currentItem, qty_mode: qtyMode };
+      const updatedItem = { ...currentItem, qty_mode: updatedMode };
 
-      if (qtyMode === 'auto') {
+      if (updatedMode === 'auto') {
         updatedItem.custom_formula = customFormula;
         const item = catalog.find(i => i.item_id === qtyPanelItemId);
         updatedItem.measured_qty = evaluateCustomFormula(
@@ -1824,7 +1843,7 @@ export default function EstimatorApp() {
               <Folder size={16} /> Projects
             </button>
             <button onClick={() => setDynamicColumnsModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
-              Columns
+              <Columns size={16} /> Dynamic Columns
             </button>
             <button onClick={() => setDataTableModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
               <Table size={16} /> Data Tables
@@ -2809,7 +2828,7 @@ export default function EstimatorApp() {
                   </div>
                 </div>
 
-                {['category', 'subcategory', 'itemgroup'].includes(colScope) && (
+                {['category', 'subcategory', 'itemgroup', 'material'].includes(colScope) && (
                   <div className="flex flex-col gap-3 p-3 bg-indigo-50/50 rounded border border-indigo-100">
                     <div className="flex gap-3">
                       <div className="flex-1">
@@ -2825,7 +2844,7 @@ export default function EstimatorApp() {
                           {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
-                      {['subcategory', 'itemgroup'].includes(colScope) && (
+                      {['subcategory', 'itemgroup', 'material'].includes(colScope) && (
                         <div className="flex-1">
                           <label className="block text-[10px] font-bold text-indigo-500 uppercase mb-1">Sub-Category (L2)</label>
                           <select 
@@ -2841,7 +2860,7 @@ export default function EstimatorApp() {
                         </div>
                       )}
                     </div>
-                    {colScope === 'itemgroup' && (
+                    {['itemgroup', 'material'].includes(colScope) && (
                       <div className="w-full">
                         <label className="block text-[10px] font-bold text-indigo-500 uppercase mb-1">Item Group (L3)</label>
                         <select 
@@ -3462,10 +3481,17 @@ export default function EstimatorApp() {
               >
                 ✋ Manual Override
               </button>
+              <button 
+                onClick={() => setQtyMode('guide')} 
+                className={`px-4 py-2 font-bold text-sm border-b-2 transition ${qtyMode === 'guide' ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+              >
+                📖 Formula Guide
+              </button>
             </div>
             
             {qtyMode === 'auto' ? (
               <div className="space-y-4">
+                {/* Existing auto formula content */}
                 <div className="flex justify-between items-center">
                   <label className="text-xs font-bold text-slate-500 uppercase">Formula Editor</label>
                   {formulaTemplates.length > 0 && (
@@ -3789,14 +3815,129 @@ export default function EstimatorApp() {
                   );
                 })()}
               </div>
+            ) : qtyMode === 'manual' ? (
+              <div className="space-y-4">
+                <div className="bg-amber-50 border border-amber-200 p-4 rounded text-sm text-amber-800">
+                  <p className="font-bold mb-1">Manual Override Active</p>
+                  <p>The calculation engine is disabled for this item. Enter the final quantity directly below.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Final Quantity</label>
+                  <input 
+                    type="text" 
+                    value={manualQty} 
+                    onChange={(e) => setManualQty(e.target.value)}
+                    className="w-full border-2 border-amber-400 rounded p-3 text-lg font-bold outline-none focus:border-amber-600"
+                    placeholder="Enter final quantity..."
+                    autoFocus
+                  />
+                </div>
+              </div>
             ) : (
-              <div>
-                <input 
-                  type="number" 
-                  value={manualQty}
-                  onChange={(e) => setManualQty(e.target.value)}
-                  className="w-full border border-amber-400 p-3 rounded text-xl font-bold focus:ring-2 focus:ring-amber-200 outline-none" 
-                />
+              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+                <div className="bg-indigo-50 border border-indigo-200 p-4 rounded text-sm text-indigo-800">
+                  <p className="font-bold mb-2 flex items-center gap-2">
+                    <BookOpen size={16} /> Formula Calculation Guide
+                  </p>
+                  <p>Learn how to use the calculation engine to automate your take-offs.</p>
+                </div>
+
+                <div className="space-y-6">
+                  <section>
+                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">1. Basic Syntax</h4>
+                    <p className="text-xs text-slate-600 mb-2">Use standard mathematical operators and parentheses to group operations.</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
+                        <span className="font-mono font-bold text-indigo-600">+ - * / ^</span>
+                        <span className="ml-2 text-slate-500">Basic Operators</span>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
+                        <span className="font-mono font-bold text-indigo-600">( )</span>
+                        <span className="ml-2 text-slate-500">Parentheses</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section>
+                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">2. Built-in Variables</h4>
+                    <p className="text-xs text-slate-600 mb-2">These variables are automatically available for every material.</p>
+                    <div className="space-y-2">
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between">
+                        <code className="font-bold text-blue-700">[Take-off]</code>
+                        <span className="text-slate-500">The measured quantity from the main table.</span>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between">
+                        <code className="font-bold text-blue-700">[Overage %]</code>
+                        <span className="text-slate-500">The waste factor percentage (e.g., 10 for 10%).</span>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between">
+                        <code className="font-bold text-blue-700">[Order]</code>
+                        <span className="text-slate-500">The packaging or divisor value.</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section>
+                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">3. Dynamic & Custom Variables</h4>
+                    <p className="text-xs text-slate-600 mb-2">Use variables from your custom columns or global variables.</p>
+                    <div className="bg-slate-50 p-3 rounded border text-[11px] space-y-2">
+                      <p>Variables must be enclosed in square brackets: <code className="bg-white px-1 border rounded text-indigo-600 font-bold">[MyVariable]</code></p>
+                      <p className="text-slate-500 italic">Note: Variable keys are case-sensitive and must match exactly.</p>
+                    </div>
+                  </section>
+
+                  <section>
+                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">4. Common Functions</h4>
+                    <p className="text-xs text-slate-600 mb-2">Use these functions for advanced rounding and logic.</p>
+                    <div className="grid grid-cols-1 gap-2">
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
+                        <div><code className="font-bold text-emerald-700">ceil(x)</code> <span className="text-slate-400 ml-1">Round up</span></div>
+                        <code className="text-slate-500">ceil(10.2) = 11</code>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
+                        <div><code className="font-bold text-emerald-700">floor(x)</code> <span className="text-slate-400 ml-1">Round down</span></div>
+                        <code className="text-slate-500">floor(10.8) = 10</code>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
+                        <div><code className="font-bold text-emerald-700">round(x, n)</code> <span className="text-slate-400 ml-1">Round to n decimals</span></div>
+                        <code className="text-slate-500">round(10.556, 2) = 10.56</code>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
+                        <div><code className="font-bold text-emerald-700">abs(x)</code> <span className="text-slate-400 ml-1">Absolute value</span></div>
+                        <code className="text-slate-500">abs(-5) = 5</code>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
+                        <div><code className="font-bold text-emerald-700">min(a, b, ...)</code> <span className="text-slate-400 ml-1">Minimum value</span></div>
+                        <code className="text-slate-500">min(5, 2, 8) = 2</code>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
+                        <div><code className="font-bold text-emerald-700">max(a, b, ...)</code> <span className="text-slate-400 ml-1">Maximum value</span></div>
+                        <code className="text-slate-500">max(5, 2, 8) = 8</code>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section>
+                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">5. Examples</h4>
+                    <div className="space-y-3">
+                      <div className="bg-slate-50 p-3 rounded border">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Standard with Overage</p>
+                        <code className="text-xs font-bold text-indigo-600 block mb-1">[Take-off] * (1 + [Overage %] / 100)</code>
+                        <p className="text-[10px] text-slate-500">Calculates take-off plus waste percentage.</p>
+                      </div>
+                      <div className="bg-slate-50 p-3 rounded border">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Rounding Up to Full Packages</p>
+                        <code className="text-xs font-bold text-indigo-600 block mb-1">ceil([Take-off] / [Order])</code>
+                        <p className="text-[10px] text-slate-500">Divides take-off by package size and rounds up to the next whole number.</p>
+                      </div>
+                      <div className="bg-slate-50 p-3 rounded border">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Complex Logic</p>
+                        <code className="text-xs font-bold text-indigo-600 block mb-1">max(10, [Take-off] * 1.1)</code>
+                        <p className="text-[10px] text-slate-500">Ensures a minimum of 10 units, or 110% of take-off, whichever is greater.</p>
+                      </div>
+                    </div>
+                  </section>
+                </div>
               </div>
             )}
             
