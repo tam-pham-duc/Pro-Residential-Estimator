@@ -6,7 +6,7 @@ import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
-  ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
+  ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
   Undo2, Redo2, Copy, Users, Folder
 } from 'lucide-react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
@@ -216,6 +216,19 @@ export default function EstimatorApp() {
 
   const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<DynamicColumn | null>(null);
+
+  const moveColumn = (index: number, direction: 'up' | 'down') => {
+    const newCols = [...dynamicColumns];
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= newCols.length) return;
+    
+    const temp = newCols[index];
+    newCols[index] = newCols[targetIndex];
+    newCols[targetIndex] = temp;
+    
+    setDynamicColumns(newCols);
+    recordHistory(`Reordered columns`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, newCols, entityData);
+  };
 
   const variableRegistry = useMemo(() => {
     const registry: Record<string, { key: string, scope: string, type: string }> = {};
@@ -652,34 +665,113 @@ export default function EstimatorApp() {
     });
   };
 
+  const formulasHash = useMemo(() => {
+    return Object.keys(takeoffData).map(id => `${id}:${takeoffData[id].custom_formula || DEFAULT_QTY_FORMULA}`).join('|');
+  }, [takeoffData]);
+
+  const dependencyMap = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const itemId in takeoffData) {
+      const formula = takeoffData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+      const variables = extractVariablesFromFormula(formula);
+      variables.forEach(v => {
+        if (!map[v]) map[v] = [];
+        if (!map[v].includes(itemId)) map[v].push(itemId);
+      });
+    }
+    return map;
+  }, [formulasHash]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const recalculateAffectedItems = useCallback((changedSources: string[], currentVars: CustomVariable[] = customVariables, currentEntityData: Record<string, Record<string, any>> = entityData, currentTakeoffData: Record<string, TakeoffItem> = takeoffData) => {
+    const affectedItems = new Set<string>();
+    const affectedVars = new Set<string>();
+    
+    const queue = [...changedSources];
+    const visited = new Set<string>(queue);
+    
+    while (queue.length > 0) {
+      const source = queue.shift()!;
+      
+      if (source.startsWith('Variable:')) {
+        const varName = source.split(':')[1];
+        affectedVars.add(varName);
+        
+        currentVars.forEach(v => {
+          if (v.formula && extractVariablesFromFormula(v.formula).includes(varName)) {
+            const nextSource = `Variable:${v.name}`;
+            if (!visited.has(nextSource)) {
+              visited.add(nextSource);
+              queue.push(nextSource);
+            }
+          }
+        });
+        
+        if (dependencyMap[varName]) {
+          dependencyMap[varName].forEach(itemId => affectedItems.add(itemId));
+        }
+      }
+      
+      if (source.startsWith('Field:') || source.startsWith('BuiltIn:')) {
+        const fieldName = source.split(':')[1];
+        if (dependencyMap[fieldName]) {
+          dependencyMap[fieldName].forEach(itemId => affectedItems.add(itemId));
+        }
+      }
+      
+      if (source.startsWith('Item:')) {
+        const itemId = source.split(':')[1];
+        affectedItems.add(itemId);
+      }
+    }
+    
+    if (affectedItems.size === 0 && affectedVars.size === 0) return { newData: currentTakeoffData, hasChanges: false, newVars: currentVars };
+    
+    let newVars = currentVars;
+    if (affectedVars.size > 0) {
+      newVars = recalculateCustomVariables(currentVars);
+      setCustomVariables(newVars);
+    }
+    
+    const newData = { ...currentTakeoffData };
+    let hasChanges = false;
+    
+    affectedItems.forEach(itemId => {
+      if (newData[itemId] && newData[itemId].qty_mode !== 'manual') {
+        const item = catalog.find(i => i.item_id === itemId);
+        if (!item) return;
+        
+        const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+        const scope = resolveDynamicScope(item, dynamicColumns);
+        
+        const newQty = evaluateCustomFormula(
+          formula,
+          newData[itemId].qty,
+          newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
+          newData[itemId].order_qty,
+          newVars,
+          scope
+        ).toString();
+        
+        if (newQty !== newData[itemId].measured_qty) {
+          newData[itemId] = { ...newData[itemId], measured_qty: newQty };
+          hasChanges = true;
+        }
+      }
+    });
+    
+    if (hasChanges) {
+      setTakeoffData(newData);
+    }
+    
+    return { newData, hasChanges, newVars };
+  }, [dependencyMap, customVariables, takeoffData, catalog, defaultOveragePct, entityData, dynamicColumns, resolveDynamicScope]);
+
   const handleDefaultOverageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setDefaultOveragePct(val);
     localStorage.setItem('defaultOveragePct', val);
-
-    setTakeoffData(prev => {
-      const newData = { ...prev };
-      let hasChanges = false;
-      for (const itemId in newData) {
-        if (newData[itemId].qty_mode !== 'manual' && newData[itemId].overage_pct === "") {
-          const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
-          const item = catalog.find(i => i.item_id === itemId);
-          const newQty = evaluateCustomFormula(
-            formula,
-            newData[itemId].qty,
-            val,
-            newData[itemId].order_qty,
-            customVariables,
-            resolveDynamicScope(item)
-          ).toString();
-          if (newData[itemId].measured_qty !== newQty) {
-            newData[itemId] = { ...newData[itemId], measured_qty: newQty };
-            hasChanges = true;
-          }
-        }
-      }
-      return hasChanges ? newData : prev;
-    });
+    
+    recalculateAffectedItems(['BuiltIn:Overage %'], customVariables, entityData, takeoffData);
   };
 
   const recalculateAllFormulas = useCallback((vars: CustomVariable[], eData: Record<string, Record<string, any>>, forceAll: boolean = false, currentCollapsedState: Record<string, boolean> = collapsedState, currentDynamicColumns: DynamicColumn[] = dynamicColumns) => {
@@ -706,6 +798,16 @@ export default function EstimatorApp() {
       const matKey = `MATERIAL:${item.item_id}`;
       if (eData[matKey]) Object.assign(scope, eData[matKey]);
       if (item.dynamicFields) Object.assign(scope, item.dynamicFields);
+      
+      // Add default values from columns
+      currentDynamicColumns.forEach(col => {
+        if (scope[col.key] === undefined && col.defaultValue !== undefined && col.defaultValue !== '') {
+          const val = col.dataType === 'number' ? Number(col.defaultValue) : 
+                      col.dataType === 'boolean' ? (col.defaultValue.toLowerCase() === 'true') : 
+                      col.defaultValue;
+          scope[col.key] = val;
+        }
+      });
       
       return scope;
     };
@@ -747,9 +849,15 @@ export default function EstimatorApp() {
     return { newData, hasChanges };
   }, [takeoffData, catalog, defaultOveragePct, collapsedState, dynamicColumns]);
 
-  const handleEntityDataBlur = (actionName: string) => {
-    const { newData, hasChanges } = recalculateAllFormulas(customVariables, entityData);
-    recordHistory(actionName, hasChanges ? newData : takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData);
+  const handleEntityDataBlur = (actionName: string, changedFields: string[] = []) => {
+    if (changedFields.length > 0) {
+      const sources = changedFields.map(f => `Field:${f}`);
+      const { newData, hasChanges } = recalculateAffectedItems(sources, customVariables, entityData, takeoffData);
+      recordHistory(actionName, hasChanges ? newData : takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData);
+    } else {
+      const { newData, hasChanges } = recalculateAllFormulas(customVariables, entityData);
+      recordHistory(actionName, hasChanges ? newData : takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData);
+    }
   };
 
   const updateTakeoffData = (itemId: string, field: keyof TakeoffItem, value: any, instruction: string, itemName: string) => {
@@ -781,18 +889,12 @@ export default function EstimatorApp() {
       }
 
       if (['qty', 'overage_pct', 'order_qty'].includes(field) || (field === 'in_scope' && finalValue)) {
-        if (newData[itemId].qty_mode !== 'manual') {
-          const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
-          const item = catalog.find(i => i.item_id === itemId);
-          newData[itemId].measured_qty = evaluateCustomFormula(
-            formula,
-            newData[itemId].qty,
-            newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
-            newData[itemId].order_qty,
-            customVariables,
-            resolveDynamicScope(item)
-          ).toString();
-        }
+        const source = field === 'qty' ? 'BuiltIn:Take-off' : (field === 'overage_pct' ? 'BuiltIn:Overage %' : (field === 'order_qty' ? 'BuiltIn:Order' : ''));
+        setTimeout(() => {
+          const sources = [`Item:${itemId}`];
+          if (source) sources.push(source);
+          recalculateAffectedItems(sources);
+        }, 0);
       }
 
       const actionDesc = field === 'in_scope' 
@@ -1819,7 +1921,7 @@ export default function EstimatorApp() {
                                     [catKey]: { ...(prev[catKey] || {}), [col.key]: newVal }
                                   }));
                                 }}
-                              onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${category}`)}
+                              onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${category}`, [col.key])}
                               className="border border-slate-300 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none"
                             />
                           </div>
@@ -1886,7 +1988,7 @@ export default function EstimatorApp() {
                                           [subCatKey]: { ...(prev[subCatKey] || {}), [col.key]: newVal }
                                         }));
                                       }}
-                                      onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${subCategory}`)}
+                                      onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${subCategory}`, [col.key])}
                                       className="border border-blue-200 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none"
                                     />
                                   </div>
@@ -1953,7 +2055,7 @@ export default function EstimatorApp() {
                                                     [itemGroupKey]: { ...(prev[itemGroupKey] || {}), [col.key]: newVal }
                                                   }));
                                                 }}
-                                                onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${subItem1}`)}
+                                                onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${subItem1}`, [col.key])}
                                                 className="border border-emerald-200 rounded px-2 py-1 text-sm focus:border-emerald-500 outline-none"
                                               />
                                             </div>
@@ -2070,7 +2172,7 @@ export default function EstimatorApp() {
                                                         [matKey]: { ...(prev[matKey] || {}), [col.key]: newVal }
                                                       }));
                                                     }}
-                                                    onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${item.item_name}`)}
+                                                    onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${item.item_name}`, [col.key])}
                                                   />
                                                 </td>
                                               );
@@ -2639,12 +2741,30 @@ export default function EstimatorApp() {
                       </tr>
                     </thead>
                     <tbody>
-                      {dynamicColumns.map(c => (
+                      {dynamicColumns.map((c, index) => (
                         <tr key={c.id} className="border-b last:border-0 hover:bg-slate-50">
                           <td className="p-2 font-bold">{c.name}</td>
                           <td className="p-2 font-mono text-xs text-indigo-700">{c.key}</td>
                           <td className="p-2 text-xs uppercase text-slate-500">{c.scope}</td>
-                          <td className="p-2 text-right">
+                          <td className="p-2 text-right flex justify-end items-center gap-1">
+                            <div className="flex flex-col mr-2">
+                              <button 
+                                onClick={() => moveColumn(index, 'up')}
+                                disabled={index === 0}
+                                className="text-slate-400 hover:text-indigo-600 disabled:opacity-30"
+                                title="Move Up"
+                              >
+                                <ChevronUp size={14} />
+                              </button>
+                              <button 
+                                onClick={() => moveColumn(index, 'down')}
+                                disabled={index === dynamicColumns.length - 1}
+                                className="text-slate-400 hover:text-indigo-600 disabled:opacity-30"
+                                title="Move Down"
+                              >
+                                <ChevronDown size={14} />
+                              </button>
+                            </div>
                             <button 
                               onClick={() => setEditingColumn(c)}
                               className="text-blue-600 hover:text-blue-800 text-xs font-bold mr-3"
@@ -3061,14 +3181,11 @@ export default function EstimatorApp() {
                         });
                       }
                       
-                      // Recalculate custom variables
-                      newVars = recalculateCustomVariables(newVars);
+                      // Recalculate affected variables and items
+                      const { newData, hasChanges, newVars: updatedVars } = recalculateAffectedItems([`Variable:${name}`], newVars, entityData, takeoffData);
                       
-                      // Recalculate all auto formulas with new variables
-                      const { newData, hasChanges } = recalculateAllFormulas(newVars, entityData);
-                      
-                      setCustomVariables(newVars);
-                      recordHistory(editingCustomVar ? `Updated variable ${name}` : `Added variable ${name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, newVars, jobNotes, dynamicColumns, entityData);
+                      setCustomVariables(updatedVars);
+                      recordHistory(editingCustomVar ? `Updated variable ${name}` : `Added variable ${name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, updatedVars, jobNotes, dynamicColumns, entityData);
                       
                       // Reset form
                       nameInput.value = '';
@@ -3130,16 +3247,11 @@ export default function EstimatorApp() {
                             <button 
                               onClick={() => {
                                 if (window.confirm(`Delete variable [${v.name}]?`)) {
-                                  let newVars = customVariables.filter(cv => cv.id !== v.id);
+                                  const newVars = customVariables.filter(cv => cv.id !== v.id);
+                                  const { newData, hasChanges, newVars: updatedVars } = recalculateAffectedItems([`Variable:${v.name}`], newVars, entityData, takeoffData);
                                   
-                                  // Recalculate custom variables
-                                  newVars = recalculateCustomVariables(newVars);
-                                  
-                                  // Recalculate all auto formulas with new variables
-                                  const { newData, hasChanges } = recalculateAllFormulas(newVars, entityData);
-                                  
-                                  setCustomVariables(newVars);
-                                  recordHistory(`Deleted variable ${v.name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, newVars, jobNotes, dynamicColumns, entityData);
+                                  setCustomVariables(updatedVars);
+                                  recordHistory(`Deleted variable ${v.name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, updatedVars, jobNotes, dynamicColumns, entityData);
                                   if (editingCustomVar?.id === v.id) setEditingCustomVar(null);
                                 }
                               }}
@@ -3318,6 +3430,25 @@ export default function EstimatorApp() {
                         </div>
                       </div>
                       <div className="flex flex-col gap-2">
+                        {dynamicColumns.filter(c => 
+                          c.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
+                          c.key.toLowerCase().includes(formulaHelpSearch.toLowerCase())
+                        ).map(c => (
+                          <div key={c.id} className="flex items-start justify-between group bg-blue-50 hover:bg-blue-100 p-2 rounded border border-blue-200 transition">
+                            <div className="flex-1 pr-2">
+                              <div className="font-mono text-xs font-bold text-blue-700">[{c.key}]</div>
+                              <div className="text-[10px] text-slate-500 mb-1">{c.name} ({c.scope})</div>
+                              <div className="text-[9px] text-slate-400 font-mono bg-white px-1 py-0.5 rounded border border-slate-100 inline-block">Type: {c.dataType}</div>
+                            </div>
+                            <button 
+                              onClick={() => insertText(`[${c.key}]`)} 
+                              className="text-xs bg-white hover:bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-200 opacity-0 group-hover:opacity-100 transition shrink-0"
+                            >
+                              Insert
+                            </button>
+                          </div>
+                        ))}
+
                         {/* Custom Variables */}
                         {customVariables.filter(v => 
                           v.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
