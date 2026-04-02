@@ -61,6 +61,15 @@ export type HistoryRecord = {
   customVariables?: CustomVariable[];
   dynamicColumns?: DynamicColumn[];
   entityData?: Record<string, Record<string, any>>;
+  formulaPresets?: FormulaPreset[];
+};
+
+export type FormulaPreset = {
+  id: string;
+  name: string;
+  formula: string;
+  description: string;
+  scope: 'global' | 'category' | 'subcategory' | 'itemgroup' | 'material';
 };
 
 export type Job = {
@@ -73,6 +82,7 @@ export type Job = {
   customVariables?: CustomVariable[];
   dynamicColumns?: DynamicColumn[];
   entityData?: Record<string, Record<string, any>>;
+  formulaPresets?: FormulaPreset[];
 };
 
 export type ProjectTemplate = {
@@ -85,6 +95,7 @@ export type ProjectTemplate = {
   customVariables: CustomVariable[];
   dynamicColumns?: DynamicColumn[];
   entityData?: Record<string, Record<string, any>>;
+  formulaPresets?: FormulaPreset[];
   defaultOveragePct?: string;
   jobNotes?: string;
   createdAt: string;

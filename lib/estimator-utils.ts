@@ -54,17 +54,99 @@ export function evaluateCustomVariableFormula(
 }
 
 export function recalculateCustomVariables(vars: { id: string, name: string, value: number, formula?: string, description: string }[]) {
-    let currentVars = [...vars];
-    // Do a few passes to resolve dependencies
-    for (let i = 0; i < 3; i++) {
-        currentVars = currentVars.map(v => {
-            if (v.formula) {
-                return { ...v, value: evaluateCustomVariableFormula(v.formula, currentVars) };
+    // Build dependency graph
+    const graph: Record<string, string[]> = {};
+    const inDegree: Record<string, number> = {};
+    const varMap: Record<string, any> = {};
+    
+    vars.forEach(v => {
+        const safeName = v.name.replace(/[^a-zA-Z0-9_]/g, '_');
+        varMap[safeName] = { ...v, safeName };
+        graph[safeName] = [];
+        inDegree[safeName] = 0;
+    });
+
+    vars.forEach(v => {
+        if (!v.formula) return;
+        const safeName = v.name.replace(/[^a-zA-Z0-9_]/g, '_');
+        
+        // Extract variables from formula
+        let parsed = v.formula.replace(/\[(.*?)\]/g, (match, p1) => {
+            return p1.replace(/[^a-zA-Z0-9_]/g, '_');
+        });
+        
+        try {
+            const node = parse(parsed);
+            node.filter(n => (n as any).isSymbolNode).forEach(n => {
+                const depName = (n as any).name;
+                if (varMap[depName] && depName !== safeName) {
+                    if (!graph[depName].includes(safeName)) {
+                        graph[depName].push(safeName);
+                        inDegree[safeName]++;
+                    }
+                }
+            });
+        } catch (e) {
+            // Ignore parse errors here, they will be caught during evaluation
+        }
+    });
+
+    // Topological sort
+    const queue: string[] = [];
+    Object.keys(inDegree).forEach(name => {
+        if (inDegree[name] === 0) queue.push(name);
+    });
+
+    const sortedNames: string[] = [];
+    while (queue.length > 0) {
+        const current = queue.shift()!;
+        sortedNames.push(current);
+        
+        graph[current].forEach(neighbor => {
+            inDegree[neighbor]--;
+            if (inDegree[neighbor] === 0) {
+                queue.push(neighbor);
             }
-            return v;
         });
     }
-    return currentVars;
+
+    // Check for circular dependencies
+    if (sortedNames.length !== vars.length) {
+        console.warn("Circular dependency detected in custom variables!");
+        // Fallback to old behavior if circular dependency exists
+        let currentVars = [...vars];
+        for (let i = 0; i < 3; i++) {
+            currentVars = currentVars.map(v => {
+                if (v.formula) {
+                    return { ...v, value: evaluateCustomVariableFormula(v.formula, currentVars) };
+                }
+                return v;
+            });
+        }
+        return currentVars;
+    }
+
+    // Evaluate in sorted order
+    const evaluatedVars = [...vars];
+    const evaluatedMap: Record<string, number> = {};
+    
+    sortedNames.forEach(name => {
+        const v = varMap[name];
+        if (v.formula) {
+            const currentVarsList = Object.keys(evaluatedMap).map(k => ({ name: k, value: evaluatedMap[k] }));
+            const val = evaluateCustomVariableFormula(v.formula, currentVarsList);
+            evaluatedMap[name] = val;
+            
+            const index = evaluatedVars.findIndex(ev => ev.id === v.id);
+            if (index !== -1) {
+                evaluatedVars[index] = { ...evaluatedVars[index], value: val };
+            }
+        } else {
+            evaluatedMap[name] = v.value;
+        }
+    });
+
+    return evaluatedVars;
 }
 
 export function evaluateCustomFormula(

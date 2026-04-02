@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables } from '@/lib/estimator-utils';
-import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client } from '@/lib/types';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaPreset } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
@@ -136,6 +136,41 @@ const FORMULA_FUNCTIONS = [
   { name: 'FLOOR', description: 'Round down to nearest integer', insert: 'FLOOR( )', example: 'FLOOR([Take-off] / [Order])' },
 ];
 
+function DebouncedInput({ 
+  value: initialValue, 
+  onChange, 
+  debounce = 300, 
+  ...props 
+}: { 
+  value: string | number; 
+  onChange: (value: string | number) => void; 
+  debounce?: number;
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange'>) {
+  const [value, setValue] = useState(initialValue);
+
+  useEffect(() => {
+    setValue(initialValue);
+  }, [initialValue]);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (value !== initialValue) {
+        onChange(value);
+      }
+    }, debounce);
+
+    return () => clearTimeout(timeout);
+  }, [value, initialValue, debounce, onChange]);
+
+  return (
+    <input 
+      {...props} 
+      value={value} 
+      onChange={e => setValue(e.target.value)} 
+    />
+  );
+}
+
 export default function EstimatorApp() {
   const [isMounted, setIsMounted] = useState(false);
   const [catalog, setCatalog] = useState<Item[]>([]);
@@ -163,6 +198,9 @@ export default function EstimatorApp() {
   const [customVariables, setCustomVariables] = useState<CustomVariable[]>([]);
   const [dynamicColumns, setDynamicColumns] = useState<DynamicColumn[]>([]);
   const [entityData, setEntityData] = useState<Record<string, Record<string, any>>>({});
+  const [formulaPresets, setFormulaPresets] = useState<FormulaPreset[]>([]);
+  const [formulaPresetModalOpen, setFormulaPresetModalOpen] = useState(false);
+  const [editingFormulaPreset, setEditingFormulaPreset] = useState<FormulaPreset | null>(null);
   const [customVarModalOpen, setCustomVarModalOpen] = useState(false);
   const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
@@ -332,6 +370,13 @@ export default function EstimatorApp() {
       } catch (e) {}
     }
 
+    const savedPresets = localStorage.getItem('formulaPresets');
+    if (savedPresets) {
+      try {
+        setFormulaPresets(JSON.parse(savedPresets));
+      } catch (e) {}
+    }
+
     const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
     setSavedJobs(jobs);
     
@@ -350,7 +395,7 @@ export default function EstimatorApp() {
     setIsMounted(true);
   }, []);
 
-  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData) => {
+  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaPresets = formulaPresets) => {
     const snapshot: HistoryRecord = {
       timestamp: new Date().toISOString(),
       action: actionDescription,
@@ -361,7 +406,8 @@ export default function EstimatorApp() {
       jobNotes: newNotes,
       customVariables: JSON.parse(JSON.stringify(newCustomVars)),
       dynamicColumns: JSON.parse(JSON.stringify(newDynamicColumns)),
-      entityData: JSON.parse(JSON.stringify(newEntityData))
+      entityData: JSON.parse(JSON.stringify(newEntityData)),
+      formulaPresets: JSON.parse(JSON.stringify(newFormulaPresets))
     };
     
     // Prevent duplicate history records using refs to ensure we have the latest state
@@ -412,6 +458,7 @@ export default function EstimatorApp() {
       if (record.customVariables) setCustomVariables(record.customVariables);
       if (record.dynamicColumns) setDynamicColumns(record.dynamicColumns);
       if (record.entityData) setEntityData(record.entityData);
+      if (record.formulaPresets) setFormulaPresets(record.formulaPresets);
       setHistoryIndex(newIndex);
     }
   }, [canUndo, historyIndex, actionHistory]);
@@ -431,6 +478,7 @@ export default function EstimatorApp() {
       if (record.customVariables) setCustomVariables(record.customVariables);
       if (record.dynamicColumns) setDynamicColumns(record.dynamicColumns);
       if (record.entityData) setEntityData(record.entityData);
+      if (record.formulaPresets) setFormulaPresets(record.formulaPresets);
       setHistoryIndex(newIndex);
     }
   }, [canRedo, historyIndex, actionHistory]);
@@ -555,35 +603,44 @@ export default function EstimatorApp() {
     });
   };
 
-  const recalculateAllFormulas = useCallback((vars: CustomVariable[], eData: Record<string, Record<string, any>>) => {
+  const recalculateAllFormulas = useCallback((vars: CustomVariable[], eData: Record<string, Record<string, any>>, forceAll: boolean = false, currentCollapsedState: Record<string, boolean> = collapsedState) => {
     const newData = { ...takeoffData };
     let hasChanges = false;
     for (const itemId in newData) {
       if (newData[itemId].qty_mode !== 'manual') {
-        const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
         const item = catalog.find(i => i.item_id === itemId);
+        if (!item) continue;
+
+        if (!forceAll) {
+          const isCatCollapsed = currentCollapsedState[item.category];
+          const isSubCollapsed = currentCollapsedState[`${item.category}||${item.sub_category}`];
+          const isSub1Collapsed = currentCollapsedState[`${item.category}||${item.sub_category}||${item.sub_item_1}`];
+          if (isCatCollapsed || isSubCollapsed || isSub1Collapsed) {
+            continue; // Skip recalculation for collapsed sections
+          }
+        }
+
+        const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
         
         const scope: Record<string, any> = {};
-        if (item) {
-          // Add built-in item properties
-          scope['Category'] = item.category;
-          scope['SubCategory'] = item.sub_category;
-          scope['ItemGroup'] = item.sub_item_1 || '';
-          scope['ItemName'] = item.item_name;
-          scope['UOM'] = item.uom;
-          
-          const catKey = `CAT:${item.category}`;
-          if (eData[catKey]) Object.assign(scope, eData[catKey]);
-          const subCatKey = `SUBCAT:${item.category}|${item.sub_category}`;
-          if (eData[subCatKey]) Object.assign(scope, eData[subCatKey]);
-          if (item.sub_item_1) {
-            const itemGroupKey = `ITEMGROUP:${item.category}|${item.sub_category}|${item.sub_item_1}`;
-            if (eData[itemGroupKey]) Object.assign(scope, eData[itemGroupKey]);
-          }
-          const matKey = `MATERIAL:${item.item_id}`;
-          if (eData[matKey]) Object.assign(scope, eData[matKey]);
-          if (item.dynamicFields) Object.assign(scope, item.dynamicFields);
+        // Add built-in item properties
+        scope['Category'] = item.category;
+        scope['SubCategory'] = item.sub_category;
+        scope['ItemGroup'] = item.sub_item_1 || '';
+        scope['ItemName'] = item.item_name;
+        scope['UOM'] = item.uom;
+        
+        const catKey = `CAT:${item.category}`;
+        if (eData[catKey]) Object.assign(scope, eData[catKey]);
+        const subCatKey = `SUBCAT:${item.category}|${item.sub_category}`;
+        if (eData[subCatKey]) Object.assign(scope, eData[subCatKey]);
+        if (item.sub_item_1) {
+          const itemGroupKey = `ITEMGROUP:${item.category}|${item.sub_category}|${item.sub_item_1}`;
+          if (eData[itemGroupKey]) Object.assign(scope, eData[itemGroupKey]);
         }
+        const matKey = `MATERIAL:${item.item_id}`;
+        if (eData[matKey]) Object.assign(scope, eData[matKey]);
+        if (item.dynamicFields) Object.assign(scope, item.dynamicFields);
 
         const newQty = evaluateCustomFormula(
           formula,
@@ -603,7 +660,7 @@ export default function EstimatorApp() {
       setTakeoffData(newData);
     }
     return { newData, hasChanges };
-  }, [takeoffData, catalog, defaultOveragePct]);
+  }, [takeoffData, catalog, defaultOveragePct, collapsedState]);
 
   const handleEntityDataBlur = (actionName: string) => {
     const { newData, hasChanges } = recalculateAllFormulas(customVariables, entityData);
@@ -665,7 +722,16 @@ export default function EstimatorApp() {
   };
 
   const toggleCollapse = (key: string) => {
-    setCollapsedState(prev => ({ ...prev, [key]: !prev[key] }));
+    setCollapsedState(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      // If expanding, recalculate formulas with the new collapsed state
+      if (!next[key]) {
+        setTimeout(() => {
+          recalculateAllFormulas(customVariables, entityData, false, next);
+        }, 0);
+      }
+      return next;
+    });
   };
 
   const renameCategory = (oldCat: string) => {
@@ -933,16 +999,20 @@ export default function EstimatorApp() {
       alert("Please enter a Project Name before saving!");
       return;
     }
+    // Force recalculate all formulas to ensure saved data is fresh
+    const { newData: freshTakeoffData } = recalculateAllFormulas(customVariables, entityData, true);
+
     const newJob: Job = {
       projectName,
       clientName,
       jobNotes,
-      takeoffData,
+      takeoffData: freshTakeoffData,
       history: actionHistory,
       lastSaved: new Date().toISOString(),
       customVariables,
       dynamicColumns,
-      entityData
+      entityData,
+      formulaPresets
     };
     const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
     setSavedJobs(newSavedJobs);
@@ -957,16 +1027,20 @@ export default function EstimatorApp() {
     const templateDesc = window.prompt("Enter template description (optional):") || "";
     const isGlobal = window.confirm("Save as Global Template? (Cancel for Personal)");
 
+    // Force recalculate all formulas to ensure saved data is fresh
+    const { newData: freshTakeoffData } = recalculateAllFormulas(customVariables, entityData, true);
+
     const newTemplate: ProjectTemplate = {
       id: "TPL-" + Date.now(),
       name: templateName,
       description: templateDesc,
       type: isGlobal ? 'global' : 'personal',
       catalog: catalog,
-      takeoffData: takeoffData,
+      takeoffData: freshTakeoffData,
       customVariables: customVariables,
       dynamicColumns: dynamicColumns,
       entityData: entityData,
+      formulaPresets: formulaPresets,
       defaultOveragePct: defaultOveragePct,
       jobNotes: jobNotes,
       createdAt: new Date().toISOString()
@@ -992,6 +1066,7 @@ export default function EstimatorApp() {
         setCustomVariables(tpl.customVariables);
         setDynamicColumns(tpl.dynamicColumns || []);
         setEntityData(tpl.entityData || {});
+        setFormulaPresets(tpl.formulaPresets || []);
         if (tpl.defaultOveragePct !== undefined) {
           setDefaultOveragePct(tpl.defaultOveragePct);
           localStorage.setItem('defaultOveragePct', tpl.defaultOveragePct);
@@ -1049,16 +1124,20 @@ export default function EstimatorApp() {
       setCustomVariables(jobData.customVariables || []);
       setDynamicColumns(jobData.dynamicColumns || []);
       setEntityData(jobData.entityData || {});
-      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || [], jobData.jobNotes || "", jobData.dynamicColumns || [], jobData.entityData || {}), 0);
+      setFormulaPresets(jobData.formulaPresets || []);
+      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || [], jobData.jobNotes || "", jobData.dynamicColumns || [], jobData.entityData || {}, jobData.formulaPresets || []), 0);
     }
   };
 
   const exportBOM = () => {
+    // Force recalculate all formulas to ensure exported data is fresh
+    const { newData: freshTakeoffData } = recalculateAllFormulas(customVariables, entityData, true);
+
     const projName = projectName || "Unnamed_Job";
     let csvContent = "Category,Sub-Category,Sub-Item Group,MATERIAL,Spec,Take-off,OVERAGE %,Order,Qty,UOM,REFERENCE,Rule / Note\n";
     let hasItems = false;
 
-    for (const [itemId, data] of Object.entries(takeoffData)) {
+    for (const [itemId, data] of Object.entries(freshTakeoffData)) {
       if (data.in_scope) {
         hasItems = true;
         const itemInfo = catalog.find(i => i.item_id === itemId);
@@ -1100,6 +1179,9 @@ export default function EstimatorApp() {
   };
 
   const exportJobJson = () => {
+    // Force recalculate all formulas to ensure exported data is fresh
+    const { newData: freshTakeoffData } = recalculateAllFormulas(customVariables, entityData, true);
+
     const projName = projectName || "Unnamed_Job";
     const fullJobData = {
       jobId: currentJobId,
@@ -1108,7 +1190,7 @@ export default function EstimatorApp() {
       jobNotes: jobNotes,
       defaultOveragePct: defaultOveragePct,
       exportDate: new Date().toISOString(),
-      takeoffData: takeoffData,
+      takeoffData: freshTakeoffData,
       historyLog: actionHistory,
       catalog: catalog,
       customVariables: customVariables,
@@ -1628,26 +1710,27 @@ export default function EstimatorApp() {
                   </div>
                 </div>
                 
-                <div className={`${isCatCollapsed ? 'hidden' : 'block'} overflow-x-auto pb-4 bg-white`}>
-                  {/* Category Dynamic Fields */}
-                  {dynamicColumns.filter(c => c.scope === 'category').length > 0 && (
-                    <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-4">
-                      {dynamicColumns.filter(c => c.scope === 'category').map(col => {
-                        const catKey = `CAT:${category}`;
-                        const val = entityData[catKey]?.[col.key] ?? col.defaultValue ?? '';
-                        return (
-                          <div key={col.id} className="flex flex-col">
-                            <label className="text-xs font-bold text-slate-500 uppercase mb-1">{col.name}</label>
-                            <input 
-                              type={col.dataType === 'number' ? 'number' : 'text'}
-                              value={val}
-                              onChange={(e) => {
-                                const newVal = col.dataType === 'number' ? parseFloat(e.target.value) : e.target.value;
-                                setEntityData(prev => ({
-                                  ...prev,
-                                  [catKey]: { ...(prev[catKey] || {}), [col.key]: newVal }
-                                }));
-                              }}
+                {!isCatCollapsed && (
+                  <div className="overflow-x-auto pb-4 bg-white">
+                    {/* Category Dynamic Fields */}
+                    {dynamicColumns.filter(c => c.scope === 'category').length > 0 && (
+                      <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-4">
+                        {dynamicColumns.filter(c => c.scope === 'category').map(col => {
+                          const catKey = `CAT:${category}`;
+                          const val = entityData[catKey]?.[col.key] ?? col.defaultValue ?? '';
+                          return (
+                            <div key={col.id} className="flex flex-col">
+                              <label className="text-xs font-bold text-slate-500 uppercase mb-1">{col.name}</label>
+                              <DebouncedInput 
+                                type={col.dataType === 'number' ? 'number' : 'text'}
+                                value={val}
+                                onChange={(val) => {
+                                  const newVal = col.dataType === 'number' ? parseFloat(String(val)) : String(val);
+                                  setEntityData(prev => ({
+                                    ...prev,
+                                    [catKey]: { ...(prev[catKey] || {}), [col.key]: newVal }
+                                  }));
+                                }}
                               onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${category}`)}
                               className="border border-slate-300 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none"
                             />
@@ -1694,21 +1777,22 @@ export default function EstimatorApp() {
                           </div>
                         </div>
                         
-                        <div className={`${isSubCollapsed ? 'hidden' : 'block'}`}>
-                          {/* SubCategory Dynamic Fields */}
-                          {dynamicColumns.filter(c => c.scope === 'subcategory').length > 0 && (
-                            <div className="px-4 py-2 bg-blue-50/30 border-b border-blue-100 flex flex-wrap gap-4">
-                              {dynamicColumns.filter(c => c.scope === 'subcategory').map(col => {
-                                const subCatKey = `SUBCAT:${category}|${subCategory}`;
-                                const val = entityData[subCatKey]?.[col.key] ?? col.defaultValue ?? '';
-                                return (
-                                  <div key={col.id} className="flex flex-col">
-                                    <label className="text-xs font-bold text-blue-600 uppercase mb-1">{col.name}</label>
-                                    <input 
-                                      type={col.dataType === 'number' ? 'number' : 'text'}
-                                      value={val}
-                                      onChange={(e) => {
-                                        const newVal = col.dataType === 'number' ? parseFloat(e.target.value) : e.target.value;
+                        {!isSubCollapsed && (
+                          <div>
+                            {/* SubCategory Dynamic Fields */}
+                            {dynamicColumns.filter(c => c.scope === 'subcategory').length > 0 && (
+                              <div className="px-4 py-2 bg-blue-50/30 border-b border-blue-100 flex flex-wrap gap-4">
+                                {dynamicColumns.filter(c => c.scope === 'subcategory').map(col => {
+                                  const subCatKey = `SUBCAT:${category}|${subCategory}`;
+                                  const val = entityData[subCatKey]?.[col.key] ?? col.defaultValue ?? '';
+                                  return (
+                                    <div key={col.id} className="flex flex-col">
+                                      <label className="text-xs font-bold text-blue-600 uppercase mb-1">{col.name}</label>
+                                      <DebouncedInput 
+                                        type={col.dataType === 'number' ? 'number' : 'text'}
+                                        value={val}
+                                      onChange={(val) => {
+                                        const newVal = col.dataType === 'number' ? parseFloat(String(val)) : String(val);
                                         setEntityData(prev => ({
                                           ...prev,
                                           [subCatKey]: { ...(prev[subCatKey] || {}), [col.key]: newVal }
@@ -1760,34 +1844,35 @@ export default function EstimatorApp() {
                                   </div>
                                 </div>
                                 
-                                <div className={`${isSub1Collapsed ? 'hidden' : 'block'}`}>
-                                  {/* ItemGroup Dynamic Fields */}
-                                  {dynamicColumns.filter(c => c.scope === 'itemgroup').length > 0 && (
-                                    <div className="px-4 py-2 bg-emerald-50/30 border-b border-emerald-100 flex flex-wrap gap-4">
-                                      {dynamicColumns.filter(c => c.scope === 'itemgroup').map(col => {
-                                        const itemGroupKey = `ITEMGROUP:${category}|${subCategory}|${subItem1}`;
-                                        const val = entityData[itemGroupKey]?.[col.key] ?? col.defaultValue ?? '';
-                                        return (
-                                          <div key={col.id} className="flex flex-col">
-                                            <label className="text-xs font-bold text-emerald-600 uppercase mb-1">{col.name}</label>
-                                            <input 
-                                              type={col.dataType === 'number' ? 'number' : 'text'}
-                                              value={val}
-                                              onChange={(e) => {
-                                                const newVal = col.dataType === 'number' ? parseFloat(e.target.value) : e.target.value;
-                                                setEntityData(prev => ({
-                                                  ...prev,
-                                                  [itemGroupKey]: { ...(prev[itemGroupKey] || {}), [col.key]: newVal }
-                                                }));
-                                              }}
-                                              onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${subItem1}`)}
-                                              className="border border-emerald-200 rounded px-2 py-1 text-sm focus:border-emerald-500 outline-none"
-                                            />
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
+                                {!isSub1Collapsed && (
+                                  <div>
+                                    {/* ItemGroup Dynamic Fields */}
+                                    {dynamicColumns.filter(c => c.scope === 'itemgroup').length > 0 && (
+                                      <div className="px-4 py-2 bg-emerald-50/30 border-b border-emerald-100 flex flex-wrap gap-4">
+                                        {dynamicColumns.filter(c => c.scope === 'itemgroup').map(col => {
+                                          const itemGroupKey = `ITEMGROUP:${category}|${subCategory}|${subItem1}`;
+                                          const val = entityData[itemGroupKey]?.[col.key] ?? col.defaultValue ?? '';
+                                          return (
+                                            <div key={col.id} className="flex flex-col">
+                                              <label className="text-xs font-bold text-emerald-600 uppercase mb-1">{col.name}</label>
+                                              <DebouncedInput 
+                                                type={col.dataType === 'number' ? 'number' : 'text'}
+                                                value={val}
+                                                onChange={(val) => {
+                                                  const newVal = col.dataType === 'number' ? parseFloat(String(val)) : String(val);
+                                                  setEntityData(prev => ({
+                                                    ...prev,
+                                                    [itemGroupKey]: { ...(prev[itemGroupKey] || {}), [col.key]: newVal }
+                                                  }));
+                                                }}
+                                                onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${subItem1}`)}
+                                                className="border border-emerald-200 rounded px-2 py-1 text-sm focus:border-emerald-500 outline-none"
+                                              />
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
                                   <table className="w-full text-left mb-4 max-w-full block md:table">
                                     <thead className="text-xs uppercase text-slate-700 bg-slate-100 border-b-2 border-slate-200 hidden md:table-header-group leading-tight">
                                       <tr>
@@ -1878,13 +1963,13 @@ export default function EstimatorApp() {
                                               return (
                                                 <td key={col.id} className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                                   <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">{col.name}</span>
-                                                  <input 
+                                                  <DebouncedInput 
                                                     type={col.dataType === 'number' ? 'number' : 'text'}
                                                     className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
                                                     value={val}
                                                     disabled={isDisabled}
-                                                    onChange={(e) => {
-                                                      const newVal = col.dataType === 'number' ? parseFloat(e.target.value) : e.target.value;
+                                                    onChange={(val) => {
+                                                      const newVal = col.dataType === 'number' ? parseFloat(String(val)) : String(val);
                                                       setEntityData(prev => ({
                                                         ...prev,
                                                         [matKey]: { ...(prev[matKey] || {}), [col.key]: newVal }
@@ -1897,26 +1982,26 @@ export default function EstimatorApp() {
                                             })}
                                             <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                               <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Spec (Details)</span>
-                                              <input 
+                                              <DebouncedInput 
                                                 type="text" 
                                                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
                                                 placeholder="..." 
                                                 value={rowData.spec || ""} 
                                                 disabled={isDisabled} 
-                                                onChange={(e) => updateTakeoffData(item.item_id, 'spec', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                onChange={(val) => updateTakeoffData(item.item_id, 'spec', String(val), item.calc_factor_instruction, item.item_name)} 
                                                 onBlur={() => recordHistory(`Updated spec for ${item.item_name}`)}
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
                                             </td>
                                             <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                               <span className="md:hidden text-xs font-bold text-emerald-700 uppercase mb-1">Take-off (Measured)</span>
-                                              <input 
+                                              <DebouncedInput 
                                                 type="text" 
                                                 className="w-full border border-emerald-300 bg-emerald-50 rounded px-2 py-1.5 text-sm font-bold text-emerald-800 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
                                                 placeholder="0" 
                                                 value={rowData.qty || ""} 
                                                 disabled={isDisabled} 
-                                                onChange={(e) => updateTakeoffData(item.item_id, 'qty', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                onChange={(val) => updateTakeoffData(item.item_id, 'qty', String(val), item.calc_factor_instruction, item.item_name)} 
                                                 onBlur={() => recordHistory(`Updated qty for ${item.item_name}`)}
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
@@ -1924,13 +2009,13 @@ export default function EstimatorApp() {
                                             <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                               <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Overage %</span>
                                               <div className="relative w-full">
-                                                <input 
+                                                <DebouncedInput 
                                                   type="text" 
                                                   className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 pr-5 md:text-center disabled:bg-slate-100 disabled:text-slate-400" 
                                                   placeholder={defaultOveragePct || "0"} 
                                                   value={rowData.overage_pct || ""} 
                                                   disabled={isDisabled} 
-                                                  onChange={(e) => updateTakeoffData(item.item_id, 'overage_pct', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                  onChange={(val) => updateTakeoffData(item.item_id, 'overage_pct', String(val), item.calc_factor_instruction, item.item_name)} 
                                                   onBlur={() => recordHistory(`Updated overage for ${item.item_name}`)}
                                                   onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                                 />
@@ -1939,13 +2024,13 @@ export default function EstimatorApp() {
                                             </td>
                                             <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                               <span className="md:hidden text-xs font-bold text-emerald-700 uppercase mb-1">Order (Pkg/Divisor)</span>
-                                              <input 
+                                              <DebouncedInput 
                                                 type="text" 
                                                 className="w-full border-2 border-emerald-500 bg-emerald-100 font-bold text-emerald-900 rounded px-2 py-1 text-sm md:text-center focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300" 
                                                 placeholder="0" 
                                                 value={rowData.order_qty || ""} 
                                                 disabled={isDisabled} 
-                                                onChange={(e) => updateTakeoffData(item.item_id, 'order_qty', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                onChange={(val) => updateTakeoffData(item.item_id, 'order_qty', String(val), item.calc_factor_instruction, item.item_name)} 
                                                 onBlur={() => recordHistory(`Updated order qty for ${item.item_name}`)}
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
@@ -1993,13 +2078,13 @@ export default function EstimatorApp() {
                                             </td>
                                             <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                               <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Reference</span>
-                                              <input 
+                                              <DebouncedInput 
                                                 type="text" 
                                                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
                                                 placeholder="Ref..." 
                                                 value={rowData.evidence || ""} 
                                                 disabled={isDisabled} 
-                                                onChange={(e) => updateTakeoffData(item.item_id, 'evidence', e.target.value, item.calc_factor_instruction, item.item_name)} 
+                                                onChange={(val) => updateTakeoffData(item.item_id, 'evidence', String(val), item.calc_factor_instruction, item.item_name)} 
                                                 onBlur={() => recordHistory(`Updated evidence for ${item.item_name}`)}
                                                 onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                               />
@@ -2016,15 +2101,18 @@ export default function EstimatorApp() {
                                       })}
                                     </tbody>
                                   </table>
-                                </div>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
-                </div>
+                  </div>
+                )}
               </div>
             );
           })
@@ -2337,6 +2425,192 @@ export default function EstimatorApp() {
         </div>
       )}
 
+      {/* Formula Preset Modal */}
+      {formulaPresetModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl p-6 border-t-4 border-indigo-500 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Manage Formula Presets</h2>
+              <button onClick={() => { setFormulaPresetModalOpen(false); setEditingFormulaPreset(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            
+            <div className="mb-6 shrink-0">
+              <h3 className="text-sm font-bold text-slate-700 mb-2">{editingFormulaPreset ? 'Edit Preset' : 'Add New Preset'}</h3>
+              <div className="space-y-3 bg-slate-50 p-3 rounded border border-slate-200">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Preset Name</label>
+                    <input 
+                      type="text" 
+                      id="fp-name"
+                      defaultValue={editingFormulaPreset?.name || ''}
+                      placeholder="e.g. Standard Drywall Calc"
+                      className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Scope</label>
+                    <select 
+                      id="fp-scope"
+                      defaultValue={editingFormulaPreset?.scope || 'global'}
+                      className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
+                    >
+                      <option value="global">Global (All Items)</option>
+                      <option value="category">Category</option>
+                      <option value="subcategory">Sub-Category</option>
+                      <option value="itemgroup">Item Group</option>
+                      <option value="material">Material</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Formula</label>
+                  <input 
+                    type="text" 
+                    id="fp-formula"
+                    defaultValue={editingFormulaPreset?.formula || ''}
+                    placeholder="e.g. [Take-off] * 1.15 / [Order]"
+                    className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Description (optional)</label>
+                  <input 
+                    type="text" 
+                    id="fp-desc"
+                    defaultValue={editingFormulaPreset?.description || ''}
+                    placeholder="e.g. Calculates drywall sheets with 15% waste"
+                    className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  {editingFormulaPreset && (
+                    <button 
+                      onClick={() => setEditingFormulaPreset(null)}
+                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded transition"
+                    >
+                      Cancel Edit
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => {
+                      const nameInput = document.getElementById('fp-name') as HTMLInputElement;
+                      const formulaInput = document.getElementById('fp-formula') as HTMLInputElement;
+                      const descInput = document.getElementById('fp-desc') as HTMLInputElement;
+                      const scopeInput = document.getElementById('fp-scope') as HTMLSelectElement;
+                      
+                      const name = nameInput.value.trim();
+                      const formula = formulaInput.value.trim();
+                      const desc = descInput.value.trim();
+                      const scope = scopeInput.value as any;
+                      
+                      if (!name) {
+                        alert("Please enter a preset name.");
+                        return;
+                      }
+                      if (!formula) {
+                        alert("Please enter a formula.");
+                        return;
+                      }
+                      
+                      let newPresets = [...formulaPresets];
+                      if (editingFormulaPreset) {
+                        newPresets = newPresets.map(p => p.id === editingFormulaPreset.id ? { ...p, name, formula, description: desc, scope } : p);
+                      } else {
+                        newPresets.push({
+                          id: "FP-" + Date.now(),
+                          name,
+                          formula,
+                          description: desc,
+                          scope
+                        });
+                      }
+                      
+                      setFormulaPresets(newPresets);
+                      localStorage.setItem('formulaPresets', JSON.stringify(newPresets));
+                      recordHistory(editingFormulaPreset ? `Updated formula preset ${name}` : `Added formula preset ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, newPresets);
+                      
+                      // Reset form
+                      nameInput.value = '';
+                      formulaInput.value = '';
+                      descInput.value = '';
+                      scopeInput.value = 'global';
+                      setEditingFormulaPreset(null);
+                    }}
+                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded transition"
+                  >
+                    {editingFormulaPreset ? 'Update Preset' : 'Add Preset'}
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex-1 overflow-hidden flex flex-col">
+              <h3 className="text-sm font-bold text-slate-700 mb-2">Existing Presets</h3>
+              <div className="flex-1 overflow-y-auto border rounded bg-white">
+                {formulaPresets.length === 0 ? (
+                  <div className="p-4 text-center text-sm text-slate-400 italic">No formula presets defined.</div>
+                ) : (
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="p-2 border-b font-bold text-slate-600">Name</th>
+                        <th className="p-2 border-b font-bold text-slate-600">Scope</th>
+                        <th className="p-2 border-b font-bold text-slate-600">Formula</th>
+                        <th className="p-2 border-b font-bold text-slate-600 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {formulaPresets.map(p => (
+                        <tr key={p.id} className="border-b last:border-0 hover:bg-slate-50">
+                          <td className="p-2 font-medium text-slate-800">{p.name}</td>
+                          <td className="p-2 text-xs text-slate-500 capitalize">{p.scope}</td>
+                          <td className="p-2 font-mono text-xs text-indigo-700 truncate max-w-[200px]" title={p.formula}>{p.formula}</td>
+                          <td className="p-2 text-right whitespace-nowrap">
+                            <button 
+                              onClick={() => {
+                                setEditingFormulaPreset(p);
+                                setTimeout(() => {
+                                  const nameInput = document.getElementById('fp-name') as HTMLInputElement;
+                                  const formulaInput = document.getElementById('fp-formula') as HTMLInputElement;
+                                  const descInput = document.getElementById('fp-desc') as HTMLInputElement;
+                                  const scopeInput = document.getElementById('fp-scope') as HTMLSelectElement;
+                                  if (nameInput) nameInput.value = p.name;
+                                  if (formulaInput) formulaInput.value = p.formula;
+                                  if (descInput) descInput.value = p.description || '';
+                                  if (scopeInput) scopeInput.value = p.scope;
+                                }, 10);
+                              }}
+                              className="text-blue-500 hover:text-blue-700 mr-3 text-xs"
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`Delete preset "${p.name}"?`)) {
+                                  const newPresets = formulaPresets.filter(fp => fp.id !== p.id);
+                                  setFormulaPresets(newPresets);
+                                  localStorage.setItem('formulaPresets', JSON.stringify(newPresets));
+                                  recordHistory(`Deleted formula preset ${p.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, newPresets);
+                                  if (editingFormulaPreset?.id === p.id) setEditingFormulaPreset(null);
+                                }
+                              }}
+                              className="text-red-500 hover:text-red-700 text-xs"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Custom Variable Modal */}
       {customVarModalOpen && (
         <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
@@ -2556,6 +2830,39 @@ export default function EstimatorApp() {
             
             {qtyMode === 'auto' ? (
               <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-500 uppercase">Formula Editor</label>
+                  {formulaPresets.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500">Apply Preset:</span>
+                      <select 
+                        className="text-xs border rounded p-1 outline-none focus:border-indigo-500"
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            const preset = formulaPresets.find(p => p.id === e.target.value);
+                            if (preset) {
+                              setCustomFormula(preset.formula);
+                            }
+                            e.target.value = ""; // Reset select
+                          }
+                        }}
+                      >
+                        <option value="">-- Select Preset --</option>
+                        {['global', 'category', 'subcategory', 'itemgroup', 'material'].map(scope => {
+                          const scopedPresets = formulaPresets.filter(p => p.scope === scope);
+                          if (scopedPresets.length === 0) return null;
+                          return (
+                            <optgroup key={scope} label={scope.charAt(0).toUpperCase() + scope.slice(1)}>
+                              {scopedPresets.map(p => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </optgroup>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  )}
+                </div>
                 <div className="border border-emerald-400 rounded overflow-hidden focus-within:ring-2 focus-within:ring-emerald-200">
                   <CodeMirror
                     ref={formulaInputRef}
@@ -2594,14 +2901,22 @@ export default function EstimatorApp() {
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-60 overflow-y-auto pr-2">
                     <div>
-                      <div className="flex items-center justify-between mb-2 sticky top-0 bg-white py-1">
+                      <div className="flex items-center justify-between mb-2 sticky top-0 bg-white py-1 z-10">
                         <h5 className="text-xs font-bold text-slate-500 uppercase">Variables</h5>
-                        <button 
-                          onClick={() => setCustomVarModalOpen(true)}
-                          className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded border border-slate-200 transition"
-                        >
-                          Manage Custom
-                        </button>
+                        <div className="flex gap-1">
+                          <button 
+                            onClick={() => setFormulaPresetModalOpen(true)}
+                            className="text-[10px] bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-2 py-1 rounded border border-indigo-200 transition"
+                          >
+                            Presets
+                          </button>
+                          <button 
+                            onClick={() => setCustomVarModalOpen(true)}
+                            className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded border border-slate-200 transition"
+                          >
+                            Manage Custom
+                          </button>
+                        </div>
                       </div>
                       <div className="flex flex-col gap-2">
                         {/* Custom Variables */}
