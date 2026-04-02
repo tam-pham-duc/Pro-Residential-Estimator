@@ -47,7 +47,7 @@ const formulaHighlightPlugin = ViewPlugin.fromClass(class {
   decorations: v => v.decorations
 });
 
-const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: DynamicColumn[]) => (context: CompletionContext): CompletionResult | null => {
+const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: DynamicColumn[], item: Item | undefined) => (context: CompletionContext): CompletionResult | null => {
   let word = context.matchBefore(/\[?[a-zA-Z0-9_ %-]*$/);
   if (!word || (word.from === word.to && !context.explicit))
     return null;
@@ -59,18 +59,34 @@ const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: Dynami
     apply: `[${cv.name}]`
   }));
 
-  const dynamicColOptions = dynamicCols.map(dc => ({
-    label: `[${dc.key}]`,
-    type: 'variable',
-    info: `Dynamic Column (${dc.scope}): ${dc.name}`,
-    apply: `[${dc.key}]`
-  }));
+  const dynamicColOptions = dynamicCols
+    .filter(dc => {
+      if (!item) return true;
+      if (dc.scope === 'itemgroup' && !item.sub_item_1) return false;
+      if (dc.scope === 'subcategory' && !item.sub_category) return false;
+      return true;
+    })
+    .map(dc => ({
+      label: `[${dc.key}]`,
+      type: 'variable',
+      info: `Dynamic Column (${dc.scope}): ${dc.name}`,
+      apply: `[${dc.key}]`
+    }));
+
+  const itemPropOptions = item ? [
+    { label: '[Category]', type: 'variable', info: `Item Category: ${item.category}`, apply: '[Category]' },
+    { label: '[SubCategory]', type: 'variable', info: `Item Sub-Category: ${item.sub_category}`, apply: '[SubCategory]' },
+    { label: '[ItemGroup]', type: 'variable', info: `Item Group: ${item.sub_item_1 || 'None'}`, apply: '[ItemGroup]' },
+    { label: '[ItemName]', type: 'variable', info: `Item Name: ${item.item_name}`, apply: '[ItemName]' },
+    { label: '[UOM]', type: 'variable', info: `Unit of Measure: ${item.uom}`, apply: '[UOM]' }
+  ] : [];
 
   return {
     from: word.from,
     options: [
       ...customVarOptions,
       ...dynamicColOptions,
+      ...itemPropOptions,
       { label: 'ROUNDUP', type: 'function', info: 'Round up to decimals. Ex: ROUNDUP([Take-off], 0)', apply: 'ROUNDUP(' },
       { label: 'ROUNDDOWN', type: 'function', info: 'Round down to decimals. Ex: ROUNDDOWN([Take-off], 1)', apply: 'ROUNDDOWN(' },
       { label: 'ROUND', type: 'function', info: 'Standard round. Ex: ROUND([Take-off] * 1.1, 2)', apply: 'ROUND(' },
@@ -154,11 +170,21 @@ export default function EstimatorApp() {
   const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<DynamicColumn | null>(null);
 
-  const formulaCompletions = useMemo(() => getFormulaCompletions(customVariables, dynamicColumns), [customVariables, dynamicColumns]);
+  const formulaCompletions = useMemo(() => {
+    const item = catalog.find(i => i.item_id === qtyPanelItemId);
+    return getFormulaCompletions(customVariables, dynamicColumns, item);
+  }, [customVariables, dynamicColumns, catalog, qtyPanelItemId]);
 
   const resolveDynamicScope = useCallback((item: Item | undefined) => {
     const scope: Record<string, any> = {};
     if (!item) return scope;
+    
+    // Add built-in item properties
+    scope['Category'] = item.category;
+    scope['SubCategory'] = item.sub_category;
+    scope['ItemGroup'] = item.sub_item_1 || '';
+    scope['ItemName'] = item.item_name;
+    scope['UOM'] = item.uom;
     
     // 4. Category level
     const catKey = `CAT:${item.category}`;
@@ -539,6 +565,13 @@ export default function EstimatorApp() {
         
         const scope: Record<string, any> = {};
         if (item) {
+          // Add built-in item properties
+          scope['Category'] = item.category;
+          scope['SubCategory'] = item.sub_category;
+          scope['ItemGroup'] = item.sub_item_1 || '';
+          scope['ItemName'] = item.item_name;
+          scope['UOM'] = item.uom;
+          
           const catKey = `CAT:${item.category}`;
           if (eData[catKey]) Object.assign(scope, eData[catKey]);
           const subCatKey = `SUBCAT:${item.category}|${item.sub_category}`;
@@ -549,6 +582,7 @@ export default function EstimatorApp() {
           }
           const matKey = `MATERIAL:${item.item_id}`;
           if (eData[matKey]) Object.assign(scope, eData[matKey]);
+          if (item.dynamicFields) Object.assign(scope, item.dynamicFields);
         }
 
         const newQty = evaluateCustomFormula(
