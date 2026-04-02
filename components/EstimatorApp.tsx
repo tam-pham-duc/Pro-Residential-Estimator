@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals } from '@/lib/estimator-utils';
-import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate } from '@/lib/types';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
@@ -47,7 +47,7 @@ const formulaHighlightPlugin = ViewPlugin.fromClass(class {
   decorations: v => v.decorations
 });
 
-const getFormulaCompletions = (customVars: CustomVariable[]) => (context: CompletionContext): CompletionResult | null => {
+const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: DynamicColumn[]) => (context: CompletionContext): CompletionResult | null => {
   let word = context.matchBefore(/\[?[a-zA-Z0-9_ %-]*$/);
   if (!word || (word.from === word.to && !context.explicit))
     return null;
@@ -59,10 +59,18 @@ const getFormulaCompletions = (customVars: CustomVariable[]) => (context: Comple
     apply: `[${cv.name}]`
   }));
 
+  const dynamicColOptions = dynamicCols.map(dc => ({
+    label: `[${dc.key}]`,
+    type: 'variable',
+    info: `Dynamic Column (${dc.scope}): ${dc.name}`,
+    apply: `[${dc.key}]`
+  }));
+
   return {
     from: word.from,
     options: [
       ...customVarOptions,
+      ...dynamicColOptions,
       { label: 'ROUNDUP', type: 'function', info: 'Round up to decimals. Ex: ROUNDUP([Take-off], 0)', apply: 'ROUNDUP(' },
       { label: 'ROUNDDOWN', type: 'function', info: 'Round down to decimals. Ex: ROUNDDOWN([Take-off], 1)', apply: 'ROUNDDOWN(' },
       { label: 'ROUND', type: 'function', info: 'Standard round. Ex: ROUND([Take-off] * 1.1, 2)', apply: 'ROUND(' },
@@ -73,8 +81,7 @@ const getFormulaCompletions = (customVars: CustomVariable[]) => (context: Comple
       { label: 'FLOOR', type: 'function', info: 'Round down to nearest integer. Ex: FLOOR([Take-off] / [Order])', apply: 'FLOOR(' },
       { label: '[Take-off]', type: 'variable', info: 'Measured Quantity. Ex: [Take-off] * 1.05' },
       { label: '[Overage %]', type: 'variable', info: 'Waste Factor Percentage. Ex: 1 + ([Overage %] / 100)' },
-      { label: '[Order]', type: 'variable', info: 'Package/Divisor. Ex: [Take-off] / [Order]' },
-      ...customVarOptions
+      { label: '[Order]', type: 'variable', info: 'Package/Divisor. Ex: [Take-off] / [Order]' }
     ]
   };
 };
@@ -123,6 +130,7 @@ export default function EstimatorApp() {
   const [searchQuery, setSearchQuery] = useState("");
   const [projectName, setProjectName] = useState("");
   const [clientName, setClientName] = useState("");
+  const [jobNotes, setJobNotes] = useState("");
   const [currentJobId, setCurrentJobId] = useState("");
   const [savedJobs, setSavedJobs] = useState<Record<string, Job>>({});
   const [defaultOveragePct, setDefaultOveragePct] = useState<string>("0");
@@ -134,11 +142,42 @@ export default function EstimatorApp() {
   const [customFormula, setCustomFormula] = useState("");
   const [manualQty, setManualQty] = useState("");
   const [customVariables, setCustomVariables] = useState<CustomVariable[]>([]);
+  const [dynamicColumns, setDynamicColumns] = useState<DynamicColumn[]>([]);
+  const [entityData, setEntityData] = useState<Record<string, Record<string, any>>>({});
   const [customVarModalOpen, setCustomVarModalOpen] = useState(false);
   const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
 
-  const formulaCompletions = useMemo(() => getFormulaCompletions(customVariables), [customVariables]);
+  const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(false);
+  const [editingColumn, setEditingColumn] = useState<DynamicColumn | null>(null);
+
+  const formulaCompletions = useMemo(() => getFormulaCompletions(customVariables, dynamicColumns), [customVariables, dynamicColumns]);
+
+  const resolveDynamicScope = useCallback((item: Item | undefined) => {
+    const scope: Record<string, any> = {};
+    if (!item) return scope;
+    
+    // 4. Category level
+    const catKey = `CAT:${item.category}`;
+    if (entityData[catKey]) Object.assign(scope, entityData[catKey]);
+    
+    // 3. SubCategory level
+    const subCatKey = `SUBCAT:${item.category}|${item.sub_category}`;
+    if (entityData[subCatKey]) Object.assign(scope, entityData[subCatKey]);
+    
+    // 2. ItemGroup level
+    if (item.sub_item_1) {
+      const itemGroupKey = `ITEMGROUP:${item.category}|${item.sub_category}|${item.sub_item_1}`;
+      if (entityData[itemGroupKey]) Object.assign(scope, entityData[itemGroupKey]);
+    }
+    
+    // 1. Material level
+    const matKey = `MATERIAL:${item.item_id}`;
+    if (entityData[matKey]) Object.assign(scope, entityData[matKey]);
+    if (item.dynamicFields) Object.assign(scope, item.dynamicFields);
+
+    return scope;
+  }, [entityData]);
 
   const formulaLinter = useMemo(() => linter((view) => {
     const diagnostics: Diagnostic[] = [];
@@ -195,7 +234,8 @@ export default function EstimatorApp() {
 
     // If basic structure is okay, check evaluate
     if (diagnostics.length === 0) {
-      const validation = validateCustomFormula(doc, customVariables);
+      const item = catalog.find(i => i.item_id === qtyPanelItemId);
+      const validation = validateCustomFormula(doc, customVariables, resolveDynamicScope(item));
       if (!validation.valid) {
         diagnostics.push({
           from: 0,
@@ -207,7 +247,7 @@ export default function EstimatorApp() {
     }
 
     return diagnostics;
-  }), [customVariables]);
+  }), [customVariables, catalog, qtyPanelItemId, resolveDynamicScope]);
 
   const [itemModalOpen, setItemModalOpen] = useState(false);
   const [itemModalMode, setItemModalMode] = useState<'add' | 'edit'>('add');
@@ -274,7 +314,7 @@ export default function EstimatorApp() {
     setIsMounted(true);
   }, []);
 
-  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables) => {
+  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData) => {
     const snapshot: HistoryRecord = {
       timestamp: new Date().toISOString(),
       action: actionDescription,
@@ -282,7 +322,10 @@ export default function EstimatorApp() {
       catalogState: JSON.parse(JSON.stringify(newCatalog)),
       projectName: newProj,
       clientName: newClient,
-      customVariables: JSON.parse(JSON.stringify(newCustomVars))
+      jobNotes: newNotes,
+      customVariables: JSON.parse(JSON.stringify(newCustomVars)),
+      dynamicColumns: JSON.parse(JSON.stringify(newDynamicColumns)),
+      entityData: JSON.parse(JSON.stringify(newEntityData))
     };
     
     // Prevent duplicate history records using refs to ensure we have the latest state
@@ -296,7 +339,10 @@ export default function EstimatorApp() {
         JSON.stringify(currentRecord.catalogState) === JSON.stringify(snapshot.catalogState) &&
         currentRecord.projectName === snapshot.projectName &&
         currentRecord.clientName === snapshot.clientName &&
-        JSON.stringify(currentRecord.customVariables) === JSON.stringify(snapshot.customVariables)
+        currentRecord.jobNotes === snapshot.jobNotes &&
+        JSON.stringify(currentRecord.customVariables) === JSON.stringify(snapshot.customVariables) &&
+        JSON.stringify(currentRecord.dynamicColumns) === JSON.stringify(snapshot.dynamicColumns) &&
+        JSON.stringify(currentRecord.entityData) === JSON.stringify(snapshot.entityData)
       ) {
         return; // No changes detected
       }
@@ -326,7 +372,10 @@ export default function EstimatorApp() {
       }
       setProjectName(record.projectName);
       setClientName(record.clientName);
+      setJobNotes(record.jobNotes || "");
       if (record.customVariables) setCustomVariables(record.customVariables);
+      if (record.dynamicColumns) setDynamicColumns(record.dynamicColumns);
+      if (record.entityData) setEntityData(record.entityData);
       setHistoryIndex(newIndex);
     }
   }, [canUndo, historyIndex, actionHistory]);
@@ -342,7 +391,10 @@ export default function EstimatorApp() {
       }
       setProjectName(record.projectName);
       setClientName(record.clientName);
+      setJobNotes(record.jobNotes || "");
       if (record.customVariables) setCustomVariables(record.customVariables);
+      if (record.dynamicColumns) setDynamicColumns(record.dynamicColumns);
+      if (record.entityData) setEntityData(record.entityData);
       setHistoryIndex(newIndex);
     }
   }, [canRedo, historyIndex, actionHistory]);
@@ -448,12 +500,14 @@ export default function EstimatorApp() {
       for (const itemId in newData) {
         if (newData[itemId].qty_mode !== 'manual' && newData[itemId].overage_pct === "") {
           const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+          const item = catalog.find(i => i.item_id === itemId);
           const newQty = evaluateCustomFormula(
             formula,
             newData[itemId].qty,
             val,
             newData[itemId].order_qty,
-            customVariables
+            customVariables,
+            resolveDynamicScope(item)
           ).toString();
           if (newData[itemId].measured_qty !== newQty) {
             newData[itemId] = { ...newData[itemId], measured_qty: newQty };
@@ -463,6 +517,53 @@ export default function EstimatorApp() {
       }
       return hasChanges ? newData : prev;
     });
+  };
+
+  const recalculateAllFormulas = useCallback((vars: CustomVariable[], eData: Record<string, Record<string, any>>) => {
+    const newData = { ...takeoffData };
+    let hasChanges = false;
+    for (const itemId in newData) {
+      if (newData[itemId].qty_mode !== 'manual') {
+        const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+        const item = catalog.find(i => i.item_id === itemId);
+        
+        const scope: Record<string, any> = {};
+        if (item) {
+          const catKey = `CAT:${item.category}`;
+          if (eData[catKey]) Object.assign(scope, eData[catKey]);
+          const subCatKey = `SUBCAT:${item.category}|${item.sub_category}`;
+          if (eData[subCatKey]) Object.assign(scope, eData[subCatKey]);
+          if (item.sub_item_1) {
+            const itemGroupKey = `ITEMGROUP:${item.category}|${item.sub_category}|${item.sub_item_1}`;
+            if (eData[itemGroupKey]) Object.assign(scope, eData[itemGroupKey]);
+          }
+          const matKey = `MATERIAL:${item.item_id}`;
+          if (eData[matKey]) Object.assign(scope, eData[matKey]);
+        }
+
+        const newQty = evaluateCustomFormula(
+          formula,
+          newData[itemId].qty,
+          newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
+          newData[itemId].order_qty,
+          vars,
+          scope
+        ).toString();
+        if (newQty !== newData[itemId].measured_qty) {
+          newData[itemId] = { ...newData[itemId], measured_qty: newQty };
+          hasChanges = true;
+        }
+      }
+    }
+    if (hasChanges) {
+      setTakeoffData(newData);
+    }
+    return { newData, hasChanges };
+  }, [takeoffData, catalog, defaultOveragePct]);
+
+  const handleEntityDataBlur = (actionName: string) => {
+    const { newData, hasChanges } = recalculateAllFormulas(customVariables, entityData);
+    recordHistory(actionName, hasChanges ? newData : takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData);
   };
 
   const updateTakeoffData = (itemId: string, field: keyof TakeoffItem, value: any, instruction: string, itemName: string) => {
@@ -496,12 +597,14 @@ export default function EstimatorApp() {
       if (['qty', 'overage_pct', 'order_qty'].includes(field)) {
         if (newData[itemId].qty_mode !== 'manual') {
           const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+          const item = catalog.find(i => i.item_id === itemId);
           newData[itemId].measured_qty = evaluateCustomFormula(
             formula,
             newData[itemId].qty,
             newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
             newData[itemId].order_qty,
-            customVariables
+            customVariables,
+            resolveDynamicScope(item)
           ).toString();
         }
       }
@@ -541,6 +644,59 @@ export default function EstimatorApp() {
     }
   };
 
+  const duplicateCategory = (oldCat: string) => {
+    const newCat = window.prompt(`Duplicate Category (L1) as:`, `${oldCat} COPY`);
+    if (newCat && newCat.trim() !== "") {
+      const upperNew = newCat.toUpperCase();
+      const itemsToDuplicate = catalog.filter(i => i.category === oldCat);
+      const newItems: Item[] = [];
+      const newTakeoffData = { ...takeoffData };
+      const newEntityData = { ...entityData };
+      
+      if (newEntityData[`CAT:${oldCat}`]) {
+        newEntityData[`CAT:${upperNew}`] = { ...newEntityData[`CAT:${oldCat}`] };
+      }
+      
+      itemsToDuplicate.forEach(item => {
+        const newItemId = "ITM-" + Date.now() + Math.random().toString(36).substring(2, 9);
+        newItems.push({ ...item, item_id: newItemId, category: upperNew });
+        if (takeoffData[item.item_id]) {
+          newTakeoffData[newItemId] = { ...takeoffData[item.item_id] };
+        }
+        
+        // Copy subcategory entity data
+        const oldSubCatKey = `SUBCAT:${oldCat}|${item.sub_category}`;
+        const newSubCatKey = `SUBCAT:${upperNew}|${item.sub_category}`;
+        if (newEntityData[oldSubCatKey] && !newEntityData[newSubCatKey]) {
+            newEntityData[newSubCatKey] = { ...newEntityData[oldSubCatKey] };
+        }
+        
+        // Copy item group entity data
+        if (item.sub_item_1) {
+            const oldItemGroupKey = `ITEMGROUP:${oldCat}|${item.sub_category}|${item.sub_item_1}`;
+            const newItemGroupKey = `ITEMGROUP:${upperNew}|${item.sub_category}|${item.sub_item_1}`;
+            if (newEntityData[oldItemGroupKey] && !newEntityData[newItemGroupKey]) {
+                newEntityData[newItemGroupKey] = { ...newEntityData[oldItemGroupKey] };
+            }
+        }
+        
+        // Copy material entity data
+        const oldMatKey = `MATERIAL:${item.item_id}`;
+        const newMatKey = `MATERIAL:${newItemId}`;
+        if (newEntityData[oldMatKey]) {
+            newEntityData[newMatKey] = { ...newEntityData[oldMatKey] };
+        }
+      });
+      
+      const newCatalog = [...catalog, ...newItems];
+      setCatalog(newCatalog);
+      setTakeoffData(newTakeoffData);
+      setEntityData(newEntityData);
+      localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
+      recordHistory(`Duplicated Category '${oldCat}' to '${upperNew}'`, newTakeoffData, newCatalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, newEntityData);
+    }
+  };
+
   const renameSubCategory = (cat: string, oldSub: string) => {
     const newSub = window.prompt(`Rename Sub-Category (L2) inside '${cat}':`, oldSub);
     if (newSub && newSub.trim() !== "" && newSub !== oldSub) {
@@ -562,6 +718,53 @@ export default function EstimatorApp() {
     }
   };
 
+  const duplicateSubCategory = (cat: string, oldSub: string) => {
+    const newSub = window.prompt(`Duplicate Sub-Category (L2) inside '${cat}' as:`, `${oldSub} Copy`);
+    if (newSub && newSub.trim() !== "") {
+      const itemsToDuplicate = catalog.filter(i => i.category === cat && i.sub_category === oldSub);
+      const newItems: Item[] = [];
+      const newTakeoffData = { ...takeoffData };
+      const newEntityData = { ...entityData };
+      
+      const oldSubCatKey = `SUBCAT:${cat}|${oldSub}`;
+      const newSubCatKey = `SUBCAT:${cat}|${newSub}`;
+      if (newEntityData[oldSubCatKey]) {
+          newEntityData[newSubCatKey] = { ...newEntityData[oldSubCatKey] };
+      }
+      
+      itemsToDuplicate.forEach(item => {
+        const newItemId = "ITM-" + Date.now() + Math.random().toString(36).substring(2, 9);
+        newItems.push({ ...item, item_id: newItemId, sub_category: newSub });
+        if (takeoffData[item.item_id]) {
+          newTakeoffData[newItemId] = { ...takeoffData[item.item_id] };
+        }
+        
+        // Copy item group entity data
+        if (item.sub_item_1) {
+            const oldItemGroupKey = `ITEMGROUP:${cat}|${oldSub}|${item.sub_item_1}`;
+            const newItemGroupKey = `ITEMGROUP:${cat}|${newSub}|${item.sub_item_1}`;
+            if (newEntityData[oldItemGroupKey] && !newEntityData[newItemGroupKey]) {
+                newEntityData[newItemGroupKey] = { ...newEntityData[oldItemGroupKey] };
+            }
+        }
+        
+        // Copy material entity data
+        const oldMatKey = `MATERIAL:${item.item_id}`;
+        const newMatKey = `MATERIAL:${newItemId}`;
+        if (newEntityData[oldMatKey]) {
+            newEntityData[newMatKey] = { ...newEntityData[oldMatKey] };
+        }
+      });
+      
+      const newCatalog = [...catalog, ...newItems];
+      setCatalog(newCatalog);
+      setTakeoffData(newTakeoffData);
+      setEntityData(newEntityData);
+      localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
+      recordHistory(`Duplicated Sub-Category '${oldSub}' to '${newSub}'`, newTakeoffData, newCatalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, newEntityData);
+    }
+  };
+
   const renameSubItem1 = (cat: string, subCat: string, oldSubItem: string) => {
     const newSubItem = window.prompt(`Rename Sub-Item Group (L3):`, oldSubItem);
     if (newSubItem && newSubItem.trim() !== "" && newSubItem !== oldSubItem) {
@@ -580,6 +783,74 @@ export default function EstimatorApp() {
         return next;
       });
       recordHistory(`Renamed L3 Group '${oldSubItem}' to '${newSubItem}'`, takeoffData, newCatalog, projectName, clientName);
+    }
+  };
+
+  const duplicateSubItem1 = (cat: string, subCat: string, oldSubItem: string) => {
+    const newSubItem = window.prompt(`Duplicate Sub-Item Group (L3) as:`, `${oldSubItem} Copy`);
+    if (newSubItem && newSubItem.trim() !== "") {
+      const itemsToDuplicate = catalog.filter(i => i.category === cat && i.sub_category === subCat && (i.sub_item_1 || "General") === oldSubItem);
+      const newItems: Item[] = [];
+      const newTakeoffData = { ...takeoffData };
+      const newEntityData = { ...entityData };
+      
+      const oldItemGroupKey = `ITEMGROUP:${cat}|${subCat}|${oldSubItem}`;
+      const newItemGroupKey = `ITEMGROUP:${cat}|${subCat}|${newSubItem}`;
+      if (newEntityData[oldItemGroupKey]) {
+          newEntityData[newItemGroupKey] = { ...newEntityData[oldItemGroupKey] };
+      }
+      
+      itemsToDuplicate.forEach(item => {
+        const newItemId = "ITM-" + Date.now() + Math.random().toString(36).substring(2, 9);
+        newItems.push({ ...item, item_id: newItemId, sub_item_1: newSubItem });
+        if (takeoffData[item.item_id]) {
+          newTakeoffData[newItemId] = { ...takeoffData[item.item_id] };
+        }
+        
+        // Copy material entity data
+        const oldMatKey = `MATERIAL:${item.item_id}`;
+        const newMatKey = `MATERIAL:${newItemId}`;
+        if (newEntityData[oldMatKey]) {
+            newEntityData[newMatKey] = { ...newEntityData[oldMatKey] };
+        }
+      });
+      
+      const newCatalog = [...catalog, ...newItems];
+      setCatalog(newCatalog);
+      setTakeoffData(newTakeoffData);
+      setEntityData(newEntityData);
+      localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
+      recordHistory(`Duplicated L3 Group '${oldSubItem}' to '${newSubItem}'`, newTakeoffData, newCatalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, newEntityData);
+    }
+  };
+
+  const duplicateMaterial = (itemId: string) => {
+    const item = catalog.find(i => i.item_id === itemId);
+    if (!item) return;
+    
+    const newName = window.prompt(`Duplicate Material as:`, `${item.item_name} Copy`);
+    if (newName && newName.trim() !== "") {
+      const newItemId = "ITM-" + Date.now() + Math.random().toString(36).substring(2, 9);
+      const newItem = { ...item, item_id: newItemId, item_name: newName };
+      const newCatalog = [...catalog, newItem];
+      const newTakeoffData = { ...takeoffData };
+      const newEntityData = { ...entityData };
+      
+      if (takeoffData[itemId]) {
+        newTakeoffData[newItemId] = { ...takeoffData[itemId] };
+      }
+      
+      const oldMatKey = `MATERIAL:${itemId}`;
+      const newMatKey = `MATERIAL:${newItemId}`;
+      if (newEntityData[oldMatKey]) {
+          newEntityData[newMatKey] = { ...newEntityData[oldMatKey] };
+      }
+      
+      setCatalog(newCatalog);
+      setTakeoffData(newTakeoffData);
+      setEntityData(newEntityData);
+      localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
+      recordHistory(`Duplicated Material '${item.item_name}' to '${newName}'`, newTakeoffData, newCatalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, newEntityData);
     }
   };
 
@@ -621,10 +892,13 @@ export default function EstimatorApp() {
     const newJob: Job = {
       projectName,
       clientName,
+      jobNotes,
       takeoffData,
       history: actionHistory,
       lastSaved: new Date().toISOString(),
-      customVariables
+      customVariables,
+      dynamicColumns,
+      entityData
     };
     const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
     setSavedJobs(newSavedJobs);
@@ -647,7 +921,10 @@ export default function EstimatorApp() {
       catalog: catalog,
       takeoffData: takeoffData,
       customVariables: customVariables,
+      dynamicColumns: dynamicColumns,
+      entityData: entityData,
       defaultOveragePct: defaultOveragePct,
+      jobNotes: jobNotes,
       createdAt: new Date().toISOString()
     };
 
@@ -669,10 +946,13 @@ export default function EstimatorApp() {
         setCatalog(tpl.catalog);
         setTakeoffData(tpl.takeoffData);
         setCustomVariables(tpl.customVariables);
+        setDynamicColumns(tpl.dynamicColumns || []);
+        setEntityData(tpl.entityData || {});
         if (tpl.defaultOveragePct !== undefined) {
           setDefaultOveragePct(tpl.defaultOveragePct);
           localStorage.setItem('defaultOveragePct', tpl.defaultOveragePct);
         }
+        setJobNotes(tpl.jobNotes || "");
         setActionHistory([]);
         setHistoryIndex(0);
         setNewProjectModalOpen(false);
@@ -685,6 +965,9 @@ export default function EstimatorApp() {
     setActionHistory([]);
     setHistoryIndex(0);
     setCustomVariables([]);
+    setDynamicColumns([]);
+    setEntityData({});
+    setJobNotes("");
     setDefaultOveragePct("");
     localStorage.removeItem('defaultOveragePct');
     setNewProjectModalOpen(false);
@@ -718,8 +1001,11 @@ export default function EstimatorApp() {
       setHistoryIndex(0);
       setProjectName(jobData.projectName || "");
       setClientName(jobData.clientName || "");
+      setJobNotes(jobData.jobNotes || "");
       setCustomVariables(jobData.customVariables || []);
-      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || []), 0);
+      setDynamicColumns(jobData.dynamicColumns || []);
+      setEntityData(jobData.entityData || {});
+      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || [], jobData.jobNotes || "", jobData.dynamicColumns || [], jobData.entityData || {}), 0);
     }
   };
 
@@ -775,12 +1061,15 @@ export default function EstimatorApp() {
       jobId: currentJobId,
       projectName: projName,
       clientName: clientName,
+      jobNotes: jobNotes,
       defaultOveragePct: defaultOveragePct,
       exportDate: new Date().toISOString(),
       takeoffData: takeoffData,
       historyLog: actionHistory,
       catalog: catalog,
-      customVariables: customVariables
+      customVariables: customVariables,
+      dynamicColumns: dynamicColumns,
+      entityData: entityData
     };
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(fullJobData, null, 2));
     const downloadAnchorNode = document.createElement('a');
@@ -809,13 +1098,16 @@ export default function EstimatorApp() {
           }
           setProjectName(importedData.projectName || "");
           setClientName(importedData.clientName || "");
+          setJobNotes(importedData.jobNotes || "");
           if (importedData.defaultOveragePct !== undefined) {
             setDefaultOveragePct(importedData.defaultOveragePct);
             localStorage.setItem('defaultOveragePct', importedData.defaultOveragePct);
           }
           setCustomVariables(importedData.customVariables || []);
+          setDynamicColumns(importedData.dynamicColumns || []);
+          setEntityData(importedData.entityData || {});
           
-          setTimeout(() => recordHistory("Imported Job from JSON File", importedData.takeoffData, importedData.catalog || catalog, importedData.projectName, importedData.clientName, importedData.customVariables || []), 0);
+          setTimeout(() => recordHistory("Imported Job from JSON File", importedData.takeoffData, importedData.catalog || catalog, importedData.projectName, importedData.clientName, importedData.customVariables || [], importedData.jobNotes || "", importedData.dynamicColumns || [], importedData.entityData || {}), 0);
           alert("Job Imported Successfully!");
         }
       } catch (err) {
@@ -884,12 +1176,14 @@ export default function EstimatorApp() {
 
       if (qtyMode === 'auto') {
         updatedItem.custom_formula = customFormula;
+        const item = catalog.find(i => i.item_id === qtyPanelItemId);
         updatedItem.measured_qty = evaluateCustomFormula(
           customFormula,
           updatedItem.qty,
           updatedItem.overage_pct !== "" ? updatedItem.overage_pct : defaultOveragePct,
           updatedItem.order_qty,
-          customVariables
+          customVariables,
+          resolveDynamicScope(item)
         ).toString();
         newData[qtyPanelItemId] = updatedItem;
         setTimeout(() => recordHistory(`Updated Auto Formula for ${itemInfo.item_name}`, newData, catalog, projectName, clientName), 0);
@@ -1155,6 +1449,9 @@ export default function EstimatorApp() {
             >
               <Redo2 size={16} />
             </button>
+            <button onClick={() => setDynamicColumnsModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+              Columns
+            </button>
             <button onClick={() => setHistoryModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
               <History size={16} /> History
             </button>
@@ -1177,39 +1474,51 @@ export default function EstimatorApp() {
 
       {/* Project Info */}
       <div className="max-w-[98%] mx-auto px-4 mb-6">
-        <div className="bg-white p-5 rounded-lg shadow-sm border border-blue-100 flex flex-col md:flex-row gap-4 md:gap-6">
-          <div className="flex-1">
-            <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Project Name</label>
-            <input 
-              type="text" 
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              onBlur={() => recordHistory('Updated Project')}
-              className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
-            />
-          </div>
-          <div className="flex-1">
-            <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Client</label>
-            <input 
-              type="text" 
-              value={clientName}
-              onChange={(e) => setClientName(e.target.value)}
-              onBlur={() => recordHistory('Updated Client')}
-              className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
-            />
-          </div>
-          <div className="w-full md:w-48">
-            <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Default Overage %</label>
-            <div className="relative">
+        <div className="bg-white p-5 rounded-lg shadow-sm border border-blue-100 flex flex-col gap-4">
+          <div className="flex flex-col md:flex-row gap-4 md:gap-6">
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Project Name</label>
               <input 
                 type="text" 
-                value={defaultOveragePct}
-                onChange={handleDefaultOverageChange}
-                onBlur={() => recordHistory('Updated Default Overage %')}
-                className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none pr-8"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                onBlur={() => recordHistory('Updated Project')}
+                className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
               />
-              <span className="absolute right-3 top-2.5 text-slate-400 font-bold">%</span>
             </div>
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Client</label>
+              <input 
+                type="text" 
+                value={clientName}
+                onChange={(e) => setClientName(e.target.value)}
+                onBlur={() => recordHistory('Updated Client')}
+                className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
+              />
+            </div>
+            <div className="w-full md:w-48">
+              <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Default Overage %</label>
+              <div className="relative">
+                <input 
+                  type="text" 
+                  value={defaultOveragePct}
+                  onChange={handleDefaultOverageChange}
+                  onBlur={() => recordHistory('Updated Default Overage %')}
+                  className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none pr-8"
+                />
+                <span className="absolute right-3 top-2.5 text-slate-400 font-bold">%</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Overall Job Notes / Specifications</label>
+            <textarea
+              value={jobNotes}
+              onChange={(e) => setJobNotes(e.target.value)}
+              onBlur={() => recordHistory('Updated Job Notes')}
+              placeholder="Enter any general notes, specifications, or details that apply to the entire project..."
+              className="w-full border border-slate-300 rounded p-2 text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none min-h-[80px]"
+            />
           </div>
         </div>
       </div>
@@ -1244,6 +1553,12 @@ export default function EstimatorApp() {
                       <Plus size={14} /> Add new Sub-Category
                     </button>
                     <button 
+                      onClick={(e) => { e.stopPropagation(); duplicateCategory(category); }} 
+                      className="text-slate-400 hover:text-white font-bold text-sm transition flex items-center gap-1"
+                    >
+                      <Copy size={14} /> Duplicate
+                    </button>
+                    <button 
                       onClick={(e) => { e.stopPropagation(); renameCategory(category); }} 
                       className="text-slate-400 hover:text-white font-bold text-sm transition flex items-center gap-1"
                     >
@@ -1253,6 +1568,33 @@ export default function EstimatorApp() {
                 </div>
                 
                 <div className={`${isCatCollapsed ? 'hidden' : 'block'} overflow-x-auto pb-4 bg-white`}>
+                  {/* Category Dynamic Fields */}
+                  {dynamicColumns.filter(c => c.scope === 'category').length > 0 && (
+                    <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-4">
+                      {dynamicColumns.filter(c => c.scope === 'category').map(col => {
+                        const catKey = `CAT:${category}`;
+                        const val = entityData[catKey]?.[col.key] ?? col.defaultValue ?? '';
+                        return (
+                          <div key={col.id} className="flex flex-col">
+                            <label className="text-xs font-bold text-slate-500 uppercase mb-1">{col.name}</label>
+                            <input 
+                              type={col.dataType === 'number' ? 'number' : 'text'}
+                              value={val}
+                              onChange={(e) => {
+                                const newVal = col.dataType === 'number' ? parseFloat(e.target.value) : e.target.value;
+                                setEntityData(prev => ({
+                                  ...prev,
+                                  [catKey]: { ...(prev[catKey] || {}), [col.key]: newVal }
+                                }));
+                              }}
+                              onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${category}`)}
+                              className="border border-slate-300 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   {Object.entries(subCategories).map(([subCategory, subItemsGroup]) => {
                     const subKey = category + '||' + subCategory;
                     const isSubCollapsed = searchQuery ? false : (collapsedState[subKey] || false);
@@ -1277,6 +1619,12 @@ export default function EstimatorApp() {
                               <Plus size={14} /> Add new Sub-Item Group (L3)
                             </button>
                             <button 
+                              onClick={(e) => { e.stopPropagation(); duplicateSubCategory(category, subCategory); }} 
+                              className="text-blue-500 hover:text-blue-800 font-bold text-sm transition flex items-center gap-1"
+                            >
+                              <Copy size={14} /> Duplicate
+                            </button>
+                            <button 
                               onClick={(e) => { e.stopPropagation(); renameSubCategory(category, subCategory); }} 
                               className="text-blue-500 hover:text-blue-800 font-bold text-sm transition flex items-center gap-1"
                             >
@@ -1286,6 +1634,33 @@ export default function EstimatorApp() {
                         </div>
                         
                         <div className={`${isSubCollapsed ? 'hidden' : 'block'}`}>
+                          {/* SubCategory Dynamic Fields */}
+                          {dynamicColumns.filter(c => c.scope === 'subcategory').length > 0 && (
+                            <div className="px-4 py-2 bg-blue-50/30 border-b border-blue-100 flex flex-wrap gap-4">
+                              {dynamicColumns.filter(c => c.scope === 'subcategory').map(col => {
+                                const subCatKey = `SUBCAT:${category}|${subCategory}`;
+                                const val = entityData[subCatKey]?.[col.key] ?? col.defaultValue ?? '';
+                                return (
+                                  <div key={col.id} className="flex flex-col">
+                                    <label className="text-xs font-bold text-blue-600 uppercase mb-1">{col.name}</label>
+                                    <input 
+                                      type={col.dataType === 'number' ? 'number' : 'text'}
+                                      value={val}
+                                      onChange={(e) => {
+                                        const newVal = col.dataType === 'number' ? parseFloat(e.target.value) : e.target.value;
+                                        setEntityData(prev => ({
+                                          ...prev,
+                                          [subCatKey]: { ...(prev[subCatKey] || {}), [col.key]: newVal }
+                                        }));
+                                      }}
+                                      onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${subCategory}`)}
+                                      className="border border-blue-200 rounded px-2 py-1 text-sm focus:border-blue-500 outline-none"
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                           {Object.entries(subItemsGroup).map(([subItem1, items]) => {
                             const sub1Key = subKey + '||' + subItem1;
                             const isSub1Collapsed = searchQuery ? false : (collapsedState[sub1Key] || false);
@@ -1310,6 +1685,12 @@ export default function EstimatorApp() {
                                       <Plus size={12} /> Add new Material
                                     </button>
                                     <button 
+                                      onClick={(e) => { e.stopPropagation(); duplicateSubItem1(category, subCategory, subItem1); }} 
+                                      className="text-emerald-400 hover:text-emerald-700 font-bold text-xs transition flex items-center gap-1"
+                                    >
+                                      <Copy size={12} /> Duplicate
+                                    </button>
+                                    <button 
                                       onClick={(e) => { e.stopPropagation(); renameSubItem1(category, subCategory, subItem1); }} 
                                       className="text-emerald-400 hover:text-emerald-700 font-bold text-xs transition flex items-center gap-1"
                                     >
@@ -1319,6 +1700,33 @@ export default function EstimatorApp() {
                                 </div>
                                 
                                 <div className={`${isSub1Collapsed ? 'hidden' : 'block'}`}>
+                                  {/* ItemGroup Dynamic Fields */}
+                                  {dynamicColumns.filter(c => c.scope === 'itemgroup').length > 0 && (
+                                    <div className="px-4 py-2 bg-emerald-50/30 border-b border-emerald-100 flex flex-wrap gap-4">
+                                      {dynamicColumns.filter(c => c.scope === 'itemgroup').map(col => {
+                                        const itemGroupKey = `ITEMGROUP:${category}|${subCategory}|${subItem1}`;
+                                        const val = entityData[itemGroupKey]?.[col.key] ?? col.defaultValue ?? '';
+                                        return (
+                                          <div key={col.id} className="flex flex-col">
+                                            <label className="text-xs font-bold text-emerald-600 uppercase mb-1">{col.name}</label>
+                                            <input 
+                                              type={col.dataType === 'number' ? 'number' : 'text'}
+                                              value={val}
+                                              onChange={(e) => {
+                                                const newVal = col.dataType === 'number' ? parseFloat(e.target.value) : e.target.value;
+                                                setEntityData(prev => ({
+                                                  ...prev,
+                                                  [itemGroupKey]: { ...(prev[itemGroupKey] || {}), [col.key]: newVal }
+                                                }));
+                                              }}
+                                              onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${subItem1}`)}
+                                              className="border border-emerald-200 rounded px-2 py-1 text-sm focus:border-emerald-500 outline-none"
+                                            />
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
                                   <table className="w-full text-left mb-4 max-w-full block md:table">
                                     <thead className="text-xs uppercase text-slate-700 bg-slate-100 border-b-2 border-slate-200 hidden md:table-header-group leading-tight">
                                       <tr>
@@ -1333,6 +1741,9 @@ export default function EstimatorApp() {
                                         </th>
                                         <th className="px-3 py-2 text-center min-w-[60px] whitespace-nowrap">SCOPE<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(in/out)</span></th>
                                         <th className="px-3 py-2 min-w-[200px] font-bold whitespace-nowrap">MATERIAL<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(name)</span></th>
+                                        {dynamicColumns.filter(c => c.scope === 'material').map(col => (
+                                          <th key={col.id} className="px-3 py-2 min-w-[100px] font-bold whitespace-nowrap uppercase">{col.name}<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">({col.unit || 'custom'})</span></th>
+                                        ))}
                                         <th className="px-3 py-2 min-w-[120px] font-bold whitespace-nowrap">SPEC<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(details)</span></th>
                                         <th className="px-3 py-2 min-w-[100px] font-bold text-emerald-700 whitespace-nowrap">TAKE-OFF<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(measured)</span></th>
                                         <th className="px-3 py-2 min-w-[100px] text-center font-bold whitespace-nowrap">OVERAGE %<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(waste factor)</span></th>
@@ -1390,11 +1801,39 @@ export default function EstimatorApp() {
                                                   onBlur={(e) => updateItemName(item.item_id, e.target.value)} 
                                                   onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
                                                 />
-                                                <button onClick={() => openItemModal('edit', item.item_id)} className="text-slate-400 hover:text-blue-600 px-2 md:px-1 ml-1" title="Advanced Edit">
-                                                  <Edit2 size={14} />
-                                                </button>
+                                                <div className="flex items-center">
+                                                  <button onClick={() => duplicateMaterial(item.item_id)} className="text-slate-400 hover:text-emerald-600 px-1" title="Duplicate Material">
+                                                    <Copy size={14} />
+                                                  </button>
+                                                  <button onClick={() => openItemModal('edit', item.item_id)} className="text-slate-400 hover:text-blue-600 px-1" title="Advanced Edit">
+                                                    <Edit2 size={14} />
+                                                  </button>
+                                                </div>
                                               </div>
                                             </td>
+                                            {dynamicColumns.filter(c => c.scope === 'material').map(col => {
+                                              const matKey = `MATERIAL:${item.item_id}`;
+                                              const val = entityData[matKey]?.[col.key] ?? col.defaultValue ?? '';
+                                              return (
+                                                <td key={col.id} className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                                  <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">{col.name}</span>
+                                                  <input 
+                                                    type={col.dataType === 'number' ? 'number' : 'text'}
+                                                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
+                                                    value={val}
+                                                    disabled={isDisabled}
+                                                    onChange={(e) => {
+                                                      const newVal = col.dataType === 'number' ? parseFloat(e.target.value) : e.target.value;
+                                                      setEntityData(prev => ({
+                                                        ...prev,
+                                                        [matKey]: { ...(prev[matKey] || {}), [col.key]: newVal }
+                                                      }));
+                                                    }}
+                                                    onBlur={() => handleEntityDataBlur(`Updated ${col.name} for ${item.item_name}`)}
+                                                  />
+                                                </td>
+                                              );
+                                            })}
                                             <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                               <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Spec (Details)</span>
                                               <input 
@@ -1531,6 +1970,168 @@ export default function EstimatorApp() {
         )}
       </div>
 
+      {/* Dynamic Columns Modal */}
+      {dynamicColumnsModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl p-6 border-t-4 border-indigo-500">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Manage Dynamic Columns</h2>
+              <button onClick={() => { setDynamicColumnsModalOpen(false); setEditingColumn(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            
+            <div className="mb-6">
+              <h3 className="text-sm font-bold text-slate-700 mb-2">{editingColumn ? 'Edit Column' : 'Add New Column'}</h3>
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const form = e.target as HTMLFormElement;
+                  const name = (form.elements.namedItem('colName') as HTMLInputElement).value.trim();
+                  const key = (form.elements.namedItem('colKey') as HTMLInputElement).value.trim();
+                  const dataType = (form.elements.namedItem('colType') as HTMLSelectElement).value as 'number' | 'text' | 'boolean';
+                  const scope = (form.elements.namedItem('colScope') as HTMLSelectElement).value as 'category' | 'subcategory' | 'itemgroup' | 'material';
+                  const unit = (form.elements.namedItem('colUnit') as HTMLInputElement).value.trim();
+                  const defaultValue = (form.elements.namedItem('colDefault') as HTMLInputElement).value.trim();
+                  
+                  if (!name || !key) {
+                    alert("Name and Key are required.");
+                    return;
+                  }
+                  
+                  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+                    alert("Key must be a valid variable name (letters, numbers, underscores, starting with a letter).");
+                    return;
+                  }
+                  
+                  let newCols = [...dynamicColumns];
+                  if (editingColumn) {
+                    newCols = newCols.map(c => c.id === editingColumn.id ? { ...c, name, key, dataType, scope, unit, defaultValue } : c);
+                  } else {
+                    if (newCols.some(c => c.key.toLowerCase() === key.toLowerCase())) {
+                      alert("A column with this key already exists.");
+                      return;
+                    }
+                    newCols.push({
+                      id: 'COL-' + Date.now(),
+                      name,
+                      key,
+                      dataType,
+                      scope,
+                      unit,
+                      defaultValue
+                    });
+                  }
+                  
+                  setDynamicColumns(newCols);
+                  recordHistory(editingColumn ? `Updated column ${name}` : `Added column ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, newCols, entityData);
+                  
+                  form.reset();
+                  setEditingColumn(null);
+                }}
+                className="bg-slate-50 p-4 rounded border border-slate-200 flex flex-col gap-3"
+              >
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Name</label>
+                    <input name="colName" type="text" required defaultValue={editingColumn?.name || ""} className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none" placeholder="e.g., Labor Rate" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Key (Variable)</label>
+                    <input name="colKey" type="text" required defaultValue={editingColumn?.key || ""} className="w-full border rounded p-2 text-sm font-mono focus:border-indigo-500 outline-none" placeholder="e.g., LaborRate" />
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label>
+                    <select name="colType" defaultValue={editingColumn?.dataType || "number"} className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                      <option value="number">Number</option>
+                      <option value="text">Text</option>
+                      <option value="boolean">Boolean</option>
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Scope</label>
+                    <select name="colScope" defaultValue={editingColumn?.scope || "material"} className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                      <option value="category">Category (L1)</option>
+                      <option value="subcategory">Sub-Category (L2)</option>
+                      <option value="itemgroup">Item Group (L3)</option>
+                      <option value="material">Material</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Unit (Optional)</label>
+                    <input name="colUnit" type="text" defaultValue={editingColumn?.unit || ""} className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none" placeholder="e.g., $/hr" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Default Value</label>
+                    <input name="colDefault" type="text" defaultValue={editingColumn?.defaultValue || ""} className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none" placeholder="e.g., 0" />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 mt-2">
+                  {editingColumn && (
+                    <button type="button" onClick={() => setEditingColumn(null)} className="px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-200 rounded">Cancel</button>
+                  )}
+                  <button type="submit" className="bg-indigo-600 text-white px-4 py-1.5 rounded text-sm font-bold hover:bg-indigo-700 transition">
+                    {editingColumn ? 'Save Changes' : 'Add Column'}
+                  </button>
+                </div>
+              </form>
+            </div>
+            
+            <div>
+              <h3 className="text-sm font-bold text-slate-700 mb-2">Existing Columns</h3>
+              <div className="max-h-48 overflow-y-auto border rounded bg-white">
+                {dynamicColumns.length === 0 ? (
+                  <div className="p-4 text-center text-sm text-slate-400 italic">No dynamic columns defined.</div>
+                ) : (
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="p-2 border-b font-bold text-slate-600">Name</th>
+                        <th className="p-2 border-b font-bold text-slate-600">Key</th>
+                        <th className="p-2 border-b font-bold text-slate-600">Scope</th>
+                        <th className="p-2 border-b font-bold text-slate-600 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dynamicColumns.map(c => (
+                        <tr key={c.id} className="border-b last:border-0 hover:bg-slate-50">
+                          <td className="p-2 font-bold">{c.name}</td>
+                          <td className="p-2 font-mono text-xs text-indigo-700">{c.key}</td>
+                          <td className="p-2 text-xs uppercase text-slate-500">{c.scope}</td>
+                          <td className="p-2 text-right">
+                            <button 
+                              onClick={() => setEditingColumn(c)}
+                              className="text-blue-600 hover:text-blue-800 text-xs font-bold mr-3"
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`Delete column ${c.name}?`)) {
+                                  const newCols = dynamicColumns.filter(col => col.id !== c.id);
+                                  setDynamicColumns(newCols);
+                                  recordHistory(`Deleted column ${c.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, newCols, entityData);
+                                  if (editingColumn?.id === c.id) setEditingColumn(null);
+                                }
+                              }}
+                              className="text-red-600 hover:text-red-800 text-xs font-bold"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Custom Variable Modal */}
       {customVarModalOpen && (
         <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
@@ -1621,29 +2222,10 @@ export default function EstimatorApp() {
                       }
                       
                       // Recalculate all auto formulas with new variables
-                      const newData = { ...takeoffData };
-                      let hasChanges = false;
-                      for (const itemId in newData) {
-                        if (newData[itemId].qty_mode !== 'manual') {
-                          const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
-                          const newQty = evaluateCustomFormula(
-                            formula,
-                            newData[itemId].qty,
-                            newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
-                            newData[itemId].order_qty,
-                            newVars
-                          ).toString();
-                          if (newData[itemId].measured_qty !== newQty) {
-                            newData[itemId] = { ...newData[itemId], measured_qty: newQty };
-                            hasChanges = true;
-                          }
-                        }
-                      }
+                      const { newData, hasChanges } = recalculateAllFormulas(newVars, entityData);
                       
                       setCustomVariables(newVars);
-                      if (hasChanges) setTakeoffData(newData);
-                      
-                      recordHistory(editingCustomVar ? `Updated variable ${name}` : `Added variable ${name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, newVars);
+                      recordHistory(editingCustomVar ? `Updated variable ${name}` : `Added variable ${name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, newVars, jobNotes, dynamicColumns, entityData);
                       
                       // Reset form
                       nameInput.value = '';
@@ -1702,29 +2284,10 @@ export default function EstimatorApp() {
                                   const newVars = customVariables.filter(cv => cv.id !== v.id);
                                   
                                   // Recalculate all auto formulas with new variables
-                                  const newData = { ...takeoffData };
-                                  let hasChanges = false;
-                                  for (const itemId in newData) {
-                                    if (newData[itemId].qty_mode !== 'manual') {
-                                      const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
-                                      const newQty = evaluateCustomFormula(
-                                        formula,
-                                        newData[itemId].qty,
-                                        newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
-                                        newData[itemId].order_qty,
-                                        newVars
-                                      ).toString();
-                                      if (newData[itemId].measured_qty !== newQty) {
-                                        newData[itemId] = { ...newData[itemId], measured_qty: newQty };
-                                        hasChanges = true;
-                                      }
-                                    }
-                                  }
+                                  const { newData, hasChanges } = recalculateAllFormulas(newVars, entityData);
                                   
                                   setCustomVariables(newVars);
-                                  if (hasChanges) setTakeoffData(newData);
-                                  
-                                  recordHistory(`Deleted variable ${v.name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, newVars);
+                                  recordHistory(`Deleted variable ${v.name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, newVars, jobNotes, dynamicColumns, entityData);
                                   if (editingCustomVar?.id === v.id) setEditingCustomVar(null);
                                 }
                               }}
@@ -1913,12 +2476,14 @@ export default function EstimatorApp() {
                 </div>
 
                 {(() => {
+                  const item = catalog.find(i => i.item_id === qtyPanelItemId);
                   const previewResult = evaluateCustomFormula(
                     customFormula, 
                     takeoffData[qtyPanelItemId]?.qty || 0, 
                     takeoffData[qtyPanelItemId]?.overage_pct !== "" && takeoffData[qtyPanelItemId]?.overage_pct !== undefined ? takeoffData[qtyPanelItemId]?.overage_pct : defaultOveragePct, 
                     takeoffData[qtyPanelItemId]?.order_qty || 1,
-                    customVariables
+                    customVariables,
+                    resolveDynamicScope(item)
                   );
                   const isError = typeof previewResult === 'string' && previewResult.startsWith('ERR');
                   return (

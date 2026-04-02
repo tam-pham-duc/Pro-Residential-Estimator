@@ -1,11 +1,11 @@
-export const DEFAULT_QTY_FORMULA = "ROUNDUP([Take-off] * (1 + [Overage %]/100) / [Order])";
+import { evaluate, parse } from 'mathjs';
+
+export const DEFAULT_QTY_FORMULA = "ceil(Takeoff * (1 + Overage / 100) / Order)";
 
 export function evaluateMath(inputStr: string | number): string | number {
     if (!inputStr) return "";
-    let sanitized = inputStr.toString().replace(/[^0-9+\-*/().]/g, '');
-    if (sanitized === "") return "";
     try { 
-        let result = new Function('return ' + sanitized)(); 
+        let result = evaluate(inputStr.toString()); 
         return Math.round(result * 100) / 100; 
     } catch (e) { 
         return inputStr; 
@@ -17,7 +17,8 @@ export function evaluateCustomFormula(
     takeoff: string | number, 
     overage: string | number, 
     order: string | number,
-    customVars: { name: string, value: number }[] = []
+    customVars: { name: string, value: number }[] = [],
+    dynamicScope: Record<string, any> = {}
 ): string | number {
     if (!formulaStr) return "";
     
@@ -26,63 +27,50 @@ export function evaluateCustomFormula(
     let ord = parseFloat(order as string);
     if (isNaN(ord) || ord === 0) ord = 1;
 
-    let parsed = formulaStr
-        .replace(/\[Take-off\]/ig, t.toString())
-        .replace(/\[Overage %\]/ig, o.toString())
-        .replace(/\[Overage\]/ig, o.toString())
-        .replace(/\[Order\]/ig, ord.toString());
+    // Build scope
+    const scope: Record<string, any> = {
+        Takeoff: t,
+        Overage: o,
+        Order: ord,
+        ...dynamicScope
+    };
 
     customVars.forEach(cv => {
-        const escapedName = cv.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`\\[${escapedName}\\]`, 'ig');
-        parsed = parsed.replace(regex, cv.value.toString());
+        // Remove spaces and special chars for mathjs compatibility if needed, 
+        // but mathjs supports variables if they are valid identifiers.
+        // Let's assume customVars names are valid identifiers or we sanitize them.
+        const safeName = cv.name.replace(/[^a-zA-Z0-9_]/g, '_');
+        scope[safeName] = cv.value;
     });
 
-    // Check for unmatched brackets or unknown variables before evaluating
-    if (parsed.includes('[')) {
-        const match = parsed.match(/\[(.*?)\]/);
-        if (match) {
-            return `ERR: Unknown variable '[${match[1]}]'`;
-        }
-        return "ERR: Missing closing bracket ']'";
-    }
-    if (parsed.includes(']')) {
-        return "ERR: Extra closing bracket ']'";
-    }
+    // Replace old syntax [Var] with Var
+    let parsed = formulaStr.replace(/\[(.*?)\]/g, (match, p1) => {
+        if (p1 === 'Overage %') return 'Overage';
+        if (p1 === 'Take-off') return 'Takeoff';
+        return p1.replace(/[^a-zA-Z0-9_]/g, '_');
+    });
 
-    const ctx = {
-        ROUNDUP: (val: number, decimals: number = 0) => {
-            const multiplier = Math.pow(10, decimals);
-            return Math.ceil(val * multiplier) / multiplier;
-        },
-        ROUNDDOWN: (val: number, decimals: number = 0) => {
-            const multiplier = Math.pow(10, decimals);
-            return Math.floor(val * multiplier) / multiplier;
-        },
-        ROUND: (val: number, decimals: number = 0) => {
-            const multiplier = Math.pow(10, decimals);
-            return Math.round(val * multiplier) / multiplier;
-        },
-        CEILING: (val: number) => Math.ceil(val),
-        FLOOR: (val: number) => Math.floor(val),
-        MAX: Math.max,
-        MIN: Math.min,
-        ABS: Math.abs,
-        SQRT: Math.sqrt,
-        POWER: Math.pow,
-        IF: (cond: any, trueVal: any, falseVal: any) => cond ? trueVal : falseVal
+    // Replace Excel-like functions with mathjs equivalents
+    parsed = parsed.replace(/\bROUNDUP\b/ig, 'ceil')
+                   .replace(/\bROUNDDOWN\b/ig, 'floor')
+                   .replace(/\bROUND\b/ig, 'round')
+                   .replace(/\bCEILING\b/ig, 'ceil')
+                   .replace(/\bFLOOR\b/ig, 'floor')
+                   .replace(/\bMAX\b/ig, 'max')
+                   .replace(/\bMIN\b/ig, 'min')
+                   .replace(/\bABS\b/ig, 'abs')
+                   .replace(/\bSQRT\b/ig, 'sqrt')
+                   .replace(/\bPOWER\b/ig, 'pow')
+                   .replace(/\bIF\b/ig, 'ifElse'); // mathjs doesn't have IF by default, we can add a custom function
+
+    // Add ifElse to scope
+    scope.ifElse = function(condition: any, trueVal: any, falseVal: any) {
+        return condition ? trueVal : falseVal;
     };
 
     try {
-        const functionNames = ['ROUNDUP', 'ROUNDDOWN', 'ROUND', 'CEILING', 'FLOOR', 'MAX', 'MIN', 'ABS', 'SQRT', 'POWER', 'IF'];
-        let safeParsed = parsed;
-        functionNames.forEach(fn => {
-            const regex = new RegExp(`\\b${fn}\\s*\\(`, 'ig');
-            safeParsed = safeParsed.replace(regex, `ctx.${fn}(`);
-        });
-
-        let result = new Function('ctx', 'return ' + safeParsed)(ctx);
-        if (isNaN(result)) return "ERR: Invalid function arguments or calculation resulted in NaN";
+        let result = evaluate(parsed, scope);
+        if (isNaN(result)) return "ERR: Invalid calculation (NaN)";
         if (!isFinite(result)) return "ERR: Division by zero or infinity";
         return Math.round(result * 100) / 100;
     } catch(e: any) {
@@ -92,66 +80,31 @@ export function evaluateCustomFormula(
 
 export function validateCustomFormula(
     formulaStr: string,
-    customVars: { name: string, value: number }[] = []
+    customVars: { name: string, value: number }[] = [],
+    dynamicScope: Record<string, any> = {}
 ): { valid: boolean; error?: string } {
-    if (!formulaStr) return { valid: true }; // Empty is valid
+    if (!formulaStr) return { valid: true };
 
-    let parsed = formulaStr
-        .replace(/\[Take-off\]/ig, "1")
-        .replace(/\[Overage %\]/ig, "0")
-        .replace(/\[Overage\]/ig, "0")
-        .replace(/\[Order\]/ig, "1");
-
-    customVars.forEach(cv => {
-        const escapedName = cv.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`\\[${escapedName}\\]`, 'ig');
-        parsed = parsed.replace(regex, "1");
+    let parsed = formulaStr.replace(/\[(.*?)\]/g, (match, p1) => {
+        if (p1 === 'Overage %') return 'Overage';
+        if (p1 === 'Take-off') return 'Takeoff';
+        return p1.replace(/[^a-zA-Z0-9_]/g, '_');
     });
 
-    // Check for unmatched brackets or unknown variables
-    if (parsed.includes('[')) {
-        const match = parsed.match(/\[(.*?)\]/);
-        if (match) {
-            return { valid: false, error: `Unknown variable '[${match[1]}]'` };
-        }
-        return { valid: false, error: "Missing closing bracket ']'" };
-    }
-    if (parsed.includes(']')) {
-        return { valid: false, error: "Extra closing bracket ']'" };
-    }
-
-    const ctx = {
-        ROUNDUP: (val: number, decimals: number = 0) => typeof val === 'number' && !isNaN(val) ? 1 : NaN,
-        ROUNDDOWN: (val: number, decimals: number = 0) => typeof val === 'number' && !isNaN(val) ? 1 : NaN,
-        ROUND: (val: number, decimals: number = 0) => typeof val === 'number' && !isNaN(val) ? 1 : NaN,
-        CEILING: (val: number) => typeof val === 'number' && !isNaN(val) ? 1 : NaN,
-        FLOOR: (val: number) => typeof val === 'number' && !isNaN(val) ? 1 : NaN,
-        MAX: (...args: any[]) => args.length > 0 && args.every(a => typeof a === 'number' && !isNaN(a)) ? 1 : NaN,
-        MIN: (...args: any[]) => args.length > 0 && args.every(a => typeof a === 'number' && !isNaN(a)) ? 1 : NaN,
-        ABS: (val: number) => typeof val === 'number' && !isNaN(val) ? 1 : NaN,
-        SQRT: (val: number) => typeof val === 'number' && !isNaN(val) && val >= 0 ? 1 : NaN,
-        POWER: (val: number, exp: number) => typeof val === 'number' && typeof exp === 'number' && !isNaN(val) && !isNaN(exp) ? 1 : NaN,
-        IF: (cond: any, trueVal: any, falseVal: any) => {
-            if (cond === undefined || trueVal === undefined || falseVal === undefined) return NaN;
-            return typeof trueVal === 'number' && typeof falseVal === 'number' ? 1 : NaN;
-        }
-    };
+    parsed = parsed.replace(/\bROUNDUP\b/ig, 'ceil')
+                   .replace(/\bROUNDDOWN\b/ig, 'floor')
+                   .replace(/\bROUND\b/ig, 'round')
+                   .replace(/\bCEILING\b/ig, 'ceil')
+                   .replace(/\bFLOOR\b/ig, 'floor')
+                   .replace(/\bMAX\b/ig, 'max')
+                   .replace(/\bMIN\b/ig, 'min')
+                   .replace(/\bABS\b/ig, 'abs')
+                   .replace(/\bSQRT\b/ig, 'sqrt')
+                   .replace(/\bPOWER\b/ig, 'pow')
+                   .replace(/\bIF\b/ig, 'ifElse');
 
     try {
-        const functionNames = ['ROUNDUP', 'ROUNDDOWN', 'ROUND', 'CEILING', 'FLOOR', 'MAX', 'MIN', 'ABS', 'SQRT', 'POWER', 'IF'];
-        let safeParsed = parsed;
-        functionNames.forEach(fn => {
-            const regex = new RegExp(`\\b${fn}\\s*\\(`, 'ig');
-            safeParsed = safeParsed.replace(regex, `ctx.${fn}(`);
-        });
-
-        let result = new Function('ctx', 'return ' + safeParsed)(ctx);
-        if (isNaN(result)) {
-            return { valid: false, error: "Formula evaluates to an invalid calculation (NaN) or has invalid function arguments" };
-        }
-        if (!isFinite(result)) {
-            return { valid: false, error: "Formula evaluates to division by zero or infinity" };
-        }
+        parse(parsed); // Just parse to check syntax
         return { valid: true };
     } catch(e: any) {
         return { valid: false, error: e.message || "Syntax error in formula" };
