@@ -38,7 +38,10 @@ export function evaluateCustomVariableFormula(
                    .replace(/\bABS\b/ig, 'abs')
                    .replace(/\bSQRT\b/ig, 'sqrt')
                    .replace(/\bPOWER\b/ig, 'pow')
-                   .replace(/\bIF\b/ig, 'ifElse');
+                   .replace(/\bIF\b/ig, 'ifElse')
+                   .replace(/\bAND\b/ig, 'and')
+                   .replace(/\bOR\b/ig, 'or')
+                   .replace(/\bNOT\b/ig, 'not');
 
     scope.ifElse = function(condition: any, trueVal: any, falseVal: any) {
         return condition ? trueVal : falseVal;
@@ -207,7 +210,10 @@ export function evaluateCustomFormula(
                    .replace(/\bABS\b/ig, 'abs')
                    .replace(/\bSQRT\b/ig, 'sqrt')
                    .replace(/\bPOWER\b/ig, 'pow')
-                   .replace(/\bIF\b/ig, 'ifElse'); // mathjs doesn't have IF by default, we can add a custom function
+                   .replace(/\bIF\b/ig, 'ifElse') // mathjs doesn't have IF by default, we can add a custom function
+                   .replace(/\bAND\b/ig, 'and')
+                   .replace(/\bOR\b/ig, 'or')
+                   .replace(/\bNOT\b/ig, 'not');
 
     // Add ifElse to scope
     scope.ifElse = function(condition: any, trueVal: any, falseVal: any) {
@@ -267,7 +273,10 @@ export function validateCustomFormula(
                    .replace(/\bABS\b/ig, 'abs')
                    .replace(/\bSQRT\b/ig, 'sqrt')
                    .replace(/\bPOWER\b/ig, 'pow')
-                   .replace(/\bIF\b/ig, 'ifElse');
+                   .replace(/\bIF\b/ig, 'ifElse')
+                   .replace(/\bAND\b/ig, 'and')
+                   .replace(/\bOR\b/ig, 'or')
+                   .replace(/\bNOT\b/ig, 'not');
 
     try {
         parse(parsed); // Just parse to check syntax

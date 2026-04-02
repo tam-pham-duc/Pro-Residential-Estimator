@@ -9,6 +9,7 @@ import {
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
   Undo2, Redo2, Copy, Users, Folder, BookOpen
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
@@ -36,7 +37,7 @@ const formulaHighlightPlugin = ViewPlugin.fromClass(class {
         widgets.push(Decoration.mark({ class: "text-amber-600 font-bold bg-amber-50 px-1 rounded" }).range(from + match.index, from + match.index + match[0].length));
       }
 
-      const fnRegex = /\b(ROUNDUP|ROUNDDOWN|ROUND|CEILING|FLOOR|MAX|MIN|ABS|SQRT|POWER|IF)\b/g;
+      const fnRegex = /\b(ROUNDUP|ROUNDDOWN|ROUND|CEILING|FLOOR|MAX|MIN|ABS|SQRT|POWER|IF|AND|OR|NOT)\b/g;
       while ((match = fnRegex.exec(text))) {
         widgets.push(Decoration.mark({ class: "text-blue-600 font-bold" }).range(from + match.index, from + match.index + match[0].length));
       }
@@ -159,6 +160,9 @@ const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: Dynami
       { label: 'ROUNDDOWN', type: 'function', info: 'Round down to decimals. Ex: ROUNDDOWN([Take-off], 1)', apply: 'ROUNDDOWN(' },
       { label: 'ROUND', type: 'function', info: 'Standard round. Ex: ROUND([Take-off] * 1.1, 2)', apply: 'ROUND(' },
       { label: 'IF', type: 'function', info: 'If condition is true, return first value, else second. Ex: IF([Take-off] > 10, 10, [Take-off])', apply: 'IF(' },
+      { label: 'AND', type: 'function', info: 'Logical AND. Ex: AND([Take-off] > 0, [Order] > 0)', apply: 'AND(' },
+      { label: 'OR', type: 'function', info: 'Logical OR. Ex: OR([Take-off] > 100, [Overage %] > 10)', apply: 'OR(' },
+      { label: 'NOT', type: 'function', info: 'Logical NOT. Ex: NOT([Take-off] == 0)', apply: 'NOT(' },
       { label: 'MAX', type: 'function', info: 'Maximum of values. Ex: MAX([Take-off], 5)', apply: 'MAX(' },
       { label: 'MIN', type: 'function', info: 'Minimum of values. Ex: MIN([Take-off], 100)', apply: 'MIN(' },
       { label: 'CEILING', type: 'function', info: 'Round up to nearest integer. Ex: CEILING([Take-off] / [Order])', apply: 'CEILING(' },
@@ -199,6 +203,9 @@ const FORMULA_FUNCTIONS = [
   { name: 'ROUNDDOWN', description: 'Round down to decimals', insert: 'ROUNDDOWN( , 0)', example: 'ROUNDDOWN([Take-off], 1)' },
   { name: 'ROUND', description: 'Standard round', insert: 'ROUND( , 0)', example: 'ROUND([Take-off] * 1.1, 2)' },
   { name: 'IF', description: 'If condition is true, return first value, else second', insert: 'IF( , , )', example: 'IF([Take-off] > 10, 10, [Take-off])' },
+  { name: 'AND', description: 'Logical AND', insert: 'AND( , )', example: 'AND([Take-off] > 0, [Order] > 0)' },
+  { name: 'OR', description: 'Logical OR', insert: 'OR( , )', example: 'OR([Take-off] > 100, [Overage %] > 10)' },
+  { name: 'NOT', description: 'Logical NOT', insert: 'NOT( )', example: 'NOT([Take-off] == 0)' },
   { name: 'MAX', description: 'Maximum of values', insert: 'MAX( , )', example: 'MAX([Take-off], 5)' },
   { name: 'MIN', description: 'Minimum of values', insert: 'MIN( , )', example: 'MIN([Take-off], 100)' },
   { name: 'CEILING', description: 'Round up to nearest integer', insert: 'CEILING( )', example: 'CEILING([Take-off] / [Order])' },
@@ -290,6 +297,14 @@ export default function EstimatorApp() {
   const [colScopeL3, setColScopeL3] = useState("");
   const [colScopeL4, setColScopeL4] = useState("");
   const [colScope, setColScope] = useState<'category' | 'subcategory' | 'itemgroup' | 'material' | 'global'>('material');
+
+  const [autoSaveModalOpen, setAutoSaveModalOpen] = useState(false);
+  const [autoSaveData, setAutoSaveData] = useState<any>(null);
+  const [lastAutoSaveTime, setLastAutoSaveTime] = useState<string | null>(null);
+
+  const [autoSaveTemplatesModalOpen, setAutoSaveTemplatesModalOpen] = useState(false);
+  const [autoSaveTemplatesData, setAutoSaveTemplatesData] = useState<any>(null);
+  const [lastTemplatesAutoSaveTime, setLastTemplatesAutoSaveTime] = useState<string | null>(null);
 
   useEffect(() => {
     if (editingColumn) {
@@ -611,6 +626,32 @@ export default function EstimatorApp() {
       setDefaultOveragePct(savedDefaultOverage);
     }
 
+    // Check for auto-saved data
+    const autoSaved = localStorage.getItem('autoSavedProject');
+    if (autoSaved) {
+      try {
+        const parsed = JSON.parse(autoSaved);
+        if (parsed && parsed.lastAutoSave) {
+          setAutoSaveData(parsed);
+          setLastAutoSaveTime(new Date(parsed.lastAutoSave).toLocaleString());
+          setAutoSaveModalOpen(true);
+        }
+      } catch (e) {}
+    }
+
+    // Check for auto-saved templates
+    const autoSavedTemplates = localStorage.getItem('autoSavedTemplates');
+    if (autoSavedTemplates) {
+      try {
+        const parsed = JSON.parse(autoSavedTemplates);
+        if (parsed && parsed.lastAutoSave) {
+          setAutoSaveTemplatesData(parsed);
+          setLastTemplatesAutoSaveTime(new Date(parsed.lastAutoSave).toLocaleString());
+          setAutoSaveTemplatesModalOpen(true);
+        }
+      } catch (e) {}
+    }
+
     setCurrentJobId("JOB-" + Date.now());
      
     setIsMounted(true);
@@ -688,6 +729,56 @@ export default function EstimatorApp() {
     return mappings;
   }, [variableRegistry]);
 
+  const autoSaveCurrentProject = useCallback(() => {
+    if (!isMounted) return;
+    
+    const projectData = {
+      projectName,
+      clientName,
+      jobNotes,
+      takeoffData,
+      customVariables,
+      dynamicColumns,
+      entityData,
+      formulaTemplates,
+      dataTables,
+      projectTemplates: templates,
+      lastAutoSave: new Date().toISOString()
+    };
+    
+    localStorage.setItem('autoSavedProject', JSON.stringify(projectData));
+    setLastAutoSaveTime(new Date().toLocaleString());
+  }, [isMounted, projectName, clientName, jobNotes, takeoffData, customVariables, dynamicColumns, entityData, formulaTemplates, dataTables, templates]);
+
+  const autoSaveTemplates = useCallback(() => {
+    if (!isMounted) return;
+    
+    const templatesData = {
+      formulaTemplates,
+      projectTemplates: templates,
+      lastAutoSave: new Date().toISOString()
+    };
+    
+    localStorage.setItem('autoSavedTemplates', JSON.stringify(templatesData));
+    setLastTemplatesAutoSaveTime(new Date().toLocaleString());
+  }, [isMounted, formulaTemplates, templates]);
+
+  useEffect(() => {
+    if (!isMounted) return;
+    const interval = setInterval(() => {
+      autoSaveCurrentProject();
+      autoSaveTemplates();
+    }, 120000); // Auto-save every 2 minutes
+    
+    return () => clearInterval(interval);
+  }, [autoSaveCurrentProject, autoSaveTemplates, isMounted]);
+
+  useEffect(() => {
+    if (isMounted) {
+      autoSaveTemplates();
+    }
+  }, [formulaTemplates, templates, isMounted, autoSaveTemplates]);
+
   const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaTemplates = formulaTemplates, newDataTables = dataTables) => {
     const snapshot: HistoryRecord = {
       timestamp: new Date().toISOString(),
@@ -733,6 +824,23 @@ export default function EstimatorApp() {
     });
     
     setHistoryIndex(0);
+
+    // Immediate auto-save on significant action
+    const projectData = {
+      projectName: newProj,
+      clientName: newClient,
+      jobNotes: newNotes,
+      takeoffData: newData,
+      customVariables: newCustomVars,
+      dynamicColumns: newDynamicColumns,
+      entityData: newEntityData,
+      formulaTemplates: newFormulaTemplates,
+      dataTables: newDataTables,
+      projectTemplates: templates,
+      lastAutoSave: new Date().toISOString()
+    };
+    localStorage.setItem('autoSavedProject', JSON.stringify(projectData));
+    setLastAutoSaveTime(new Date().toLocaleString());
   };
 
   const canUndo = historyIndex < actionHistory.length - 1;
@@ -4324,11 +4432,38 @@ export default function EstimatorApp() {
                         <div><code className="font-bold text-emerald-700">max(a, b, ...)</code> <span className="text-slate-400 ml-1">Maximum value</span></div>
                         <code className="text-slate-500">max(5, 2, 8) = 8</code>
                       </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
+                        <div><code className="font-bold text-emerald-700">IF(cond, t, f)</code> <span className="text-slate-400 ml-1">Conditional logic</span></div>
+                        <code className="text-slate-500">IF(1 &gt; 0, 10, 5) = 10</code>
+                      </div>
                     </div>
                   </section>
 
                   <section>
-                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">5. Examples</h4>
+                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">5. Logical Operators</h4>
+                    <p className="text-xs text-slate-600 mb-2">Use these inside IF functions to compare values.</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
+                        <span className="font-mono font-bold text-indigo-600">== !=</span>
+                        <span className="ml-2 text-slate-500">Equal / Not Equal</span>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
+                        <span className="font-mono font-bold text-indigo-600">&gt; &lt; &gt;= &lt;=</span>
+                        <span className="ml-2 text-slate-500">Comparisons</span>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
+                        <span className="font-mono font-bold text-indigo-600">and or not</span>
+                        <span className="ml-2 text-slate-500">Logical AND / OR / NOT</span>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
+                        <span className="font-mono font-bold text-indigo-600">&amp;&amp; || !</span>
+                        <span className="ml-2 text-slate-500">Alternative Logic</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section>
+                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">6. Examples</h4>
                     <div className="space-y-3">
                       <div className="bg-slate-50 p-3 rounded border">
                         <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Standard with Overage</p>
@@ -4344,6 +4479,16 @@ export default function EstimatorApp() {
                         <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Complex Logic</p>
                         <code className="text-xs font-bold text-indigo-600 block mb-1">max(10, [Take-off] * 1.1)</code>
                         <p className="text-[10px] text-slate-500">Ensures a minimum of 10 units, or 110% of take-off, whichever is greater.</p>
+                      </div>
+                      <div className="bg-slate-50 p-3 rounded border">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Conditional Logic (IF)</p>
+                        <code className="text-xs font-bold text-indigo-600 block mb-1">IF([Take-off] &gt; 100, [Take-off] * 1.05, [Take-off] * 1.15)</code>
+                        <p className="text-[10px] text-slate-500">If take-off is over 100, add 5% waste, otherwise add 15% waste.</p>
+                      </div>
+                      <div className="bg-slate-50 p-3 rounded border">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Nested IF & Comparisons</p>
+                        <code className="text-xs font-bold text-indigo-600 block mb-1">IF([Category] == &quot;Lumber&quot;, [Take-off] * 1.1, [Take-off])</code>
+                        <p className="text-[10px] text-slate-500">Only add 10% waste if the item category is &quot;Lumber&quot;.</p>
                       </div>
                     </div>
                   </section>
@@ -4949,6 +5094,143 @@ export default function EstimatorApp() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Auto-save Recovery Modal */}
+      {autoSaveModalOpen && autoSaveData && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+          >
+            <div className="p-6 border-b bg-amber-50">
+              <div className="flex items-center gap-3 text-amber-700 mb-2">
+                <div className="p-2 bg-amber-100 rounded-lg">
+                  <Save size={24} />
+                </div>
+                <h2 className="text-xl font-bold">Auto-save Found</h2>
+              </div>
+              <p className="text-amber-600 text-sm">
+                We found an un-saved session from <strong>{lastAutoSaveTime}</strong>. 
+                Would you like to restore it?
+              </p>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="bg-slate-50 p-4 rounded-lg border text-sm space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Project:</span>
+                  <span className="font-medium">{autoSaveData.projectName || "Untitled Project"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Items:</span>
+                  <span className="font-medium">{Object.keys(autoSaveData.takeoffData || {}).length}</span>
+                </div>
+              </div>
+              
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => {
+                    localStorage.removeItem('autoSavedProject');
+                    setAutoSaveModalOpen(false);
+                  }}
+                  className="flex-1 px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 font-medium transition"
+                >
+                  Discard
+                </button>
+                <button 
+                  onClick={() => {
+                    setProjectName(autoSaveData.projectName || "");
+                    setClientName(autoSaveData.clientName || "");
+                    setJobNotes(autoSaveData.jobNotes || "");
+                    setTakeoffData(autoSaveData.takeoffData || {});
+                    setCustomVariables(autoSaveData.customVariables || []);
+                    setDynamicColumns(autoSaveData.dynamicColumns || []);
+                    setEntityData(autoSaveData.entityData || {});
+                    setFormulaTemplates(autoSaveData.formulaTemplates || []);
+                    setDataTables(autoSaveData.dataTables || []);
+                    if (autoSaveData.projectTemplates) setTemplates(autoSaveData.projectTemplates);
+                    
+                    setAutoSaveModalOpen(false);
+                    // Clear it after restore to prevent repeated prompts
+                    localStorage.removeItem('autoSavedProject');
+                  }}
+                  className="flex-1 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-500 font-medium shadow-sm transition"
+                >
+                  Restore Session
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Template Auto-save Recovery Modal */}
+      {autoSaveTemplatesModalOpen && autoSaveTemplatesData && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+          >
+            <div className="p-6 border-b bg-indigo-50">
+              <div className="flex items-center gap-3 text-indigo-700 mb-2">
+                <div className="p-2 bg-indigo-100 rounded-lg">
+                  <BookOpen size={24} />
+                </div>
+                <h2 className="text-xl font-bold">Templates Auto-save Found</h2>
+              </div>
+              <p className="text-indigo-600 text-sm">
+                We found an un-saved templates session from <strong>{lastTemplatesAutoSaveTime}</strong>. 
+                Would you like to restore your formula and project templates?
+              </p>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="bg-slate-50 p-4 rounded-lg border text-sm space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Formula Templates:</span>
+                  <span className="font-medium">{autoSaveTemplatesData.formulaTemplates?.length || 0}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Project Templates:</span>
+                  <span className="font-medium">{autoSaveTemplatesData.projectTemplates?.length || 0}</span>
+                </div>
+              </div>
+              
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => {
+                    localStorage.removeItem('autoSavedTemplates');
+                    setAutoSaveTemplatesModalOpen(false);
+                  }}
+                  className="flex-1 px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 font-medium transition"
+                >
+                  Discard
+                </button>
+                <button 
+                  onClick={() => {
+                    if (autoSaveTemplatesData.formulaTemplates) {
+                      setFormulaTemplates(autoSaveTemplatesData.formulaTemplates);
+                      localStorage.setItem('formulaTemplates', JSON.stringify(autoSaveTemplatesData.formulaTemplates));
+                    }
+                    if (autoSaveTemplatesData.projectTemplates) {
+                      setTemplates(autoSaveTemplatesData.projectTemplates);
+                      localStorage.setItem('projectTemplates', JSON.stringify(autoSaveTemplatesData.projectTemplates));
+                    }
+                    
+                    setAutoSaveTemplatesModalOpen(false);
+                    localStorage.removeItem('autoSavedTemplates');
+                  }}
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 font-medium shadow-sm transition"
+                >
+                  Restore Templates
+                </button>
+              </div>
+            </div>
+          </motion.div>
         </div>
       )}
 
