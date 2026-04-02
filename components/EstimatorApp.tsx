@@ -624,51 +624,65 @@ export default function EstimatorApp() {
 
   const autoMapVariables = useCallback((template: FormulaTemplate, item: Item | undefined) => {
     const mappings: Record<string, string> = {};
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
     
     template.variables.forEach(v => {
       // 1. Check for built-in variables first
       const vLower = v.toLowerCase();
-      if (vLower === 'take-off' || vLower === 'takeoff') {
+      const vNorm = normalize(v);
+
+      if (vLower === 'take-off' || vLower === 'takeoff' || vNorm === 'takeoff') {
         mappings[v] = '[Take-off]';
         return;
       }
-      if (vLower === 'overage %' || vLower === 'overage') {
+      if (vLower === 'overage %' || vLower === 'overage' || vNorm === 'overage') {
         mappings[v] = '[Overage %]';
         return;
       }
-      if (vLower === 'order') {
+      if (vLower === 'order' || vNorm === 'order') {
         mappings[v] = '[Order]';
         return;
       }
 
-      // 2. Find all potential matches in registry
-      const matches = Object.entries(variableRegistry).filter(([regKey]) => 
-        regKey.toLowerCase() === vLower
-      );
+      // 2. Find potential matches in registry
+      const allVars = Object.entries(variableRegistry);
+      
+      // Priority 1: Exact name match + Relevant scope
+      // Priority 2: Exact name match + Global scope
+      // Priority 3: Normalized name match + Relevant scope
+      // Priority 4: Normalized name match + Global scope
+      // Priority 5: Any exact name match
+      // Priority 6: Any normalized name match
 
-      if (matches.length === 0) return;
+      const isRelevant = (info: any) => {
+        if (!item) return info.scope === 'global';
+        if (info.scope === 'global') return true;
+        if (!info.col) return false;
+        const c = info.col;
+        if (c.scope === 'category' && c.category === item.category) return true;
+        if (c.scope === 'subcategory' && c.category === item.category && c.subCategory === item.sub_category) return true;
+        if (c.scope === 'itemgroup' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '')) return true;
+        if (c.scope === 'material' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '') && c.materialName === item.item_name) return true;
+        return false;
+      };
 
-      // 3. If we have matches, prioritize by scope relevance to current item
-      if (item) {
-        const relevantMatch = matches.find(([_, info]) => {
-          if (info.scope === 'global') return true;
-          if (!info.col) return false;
-          const c = info.col;
-          if (c.scope === 'category' && c.category === item.category) return true;
-          if (c.scope === 'subcategory' && c.category === item.category && c.subCategory === item.sub_category) return true;
-          if (c.scope === 'itemgroup' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '')) return true;
-          if (c.scope === 'material' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '') && c.materialName === item.item_name) return true;
-          return false;
-        });
+      const exactMatches = allVars.filter(([regKey]) => regKey.toLowerCase() === vLower);
+      const normMatches = allVars.filter(([regKey]) => normalize(regKey) === vNorm);
 
-        if (relevantMatch) {
-          mappings[v] = `[${relevantMatch[0]}]`;
-          return;
-        }
-      }
+      const bestExactRelevant = exactMatches.find(([_, info]) => isRelevant(info));
+      if (bestExactRelevant) { mappings[v] = `[${bestExactRelevant[0]}]`; return; }
 
-      // 4. Fallback to first case-insensitive match if no scope-relevant match found
-      mappings[v] = `[${matches[0][0]}]`;
+      const bestExactGlobal = exactMatches.find(([_, info]) => info.scope === 'global');
+      if (bestExactGlobal) { mappings[v] = `[${bestExactGlobal[0]}]`; return; }
+
+      const bestNormRelevant = normMatches.find(([_, info]) => isRelevant(info));
+      if (bestNormRelevant) { mappings[v] = `[${bestNormRelevant[0]}]`; return; }
+
+      const bestNormGlobal = normMatches.find(([_, info]) => info.scope === 'global');
+      if (bestNormGlobal) { mappings[v] = `[${bestNormGlobal[0]}]`; return; }
+
+      if (exactMatches.length > 0) { mappings[v] = `[${exactMatches[0][0]}]`; return; }
+      if (normMatches.length > 0) { mappings[v] = `[${normMatches[0][0]}]`; return; }
     });
     
     return mappings;
@@ -3331,8 +3345,12 @@ export default function EstimatorApp() {
                   }
                 });
 
-                // Check for "Best Match" (name match)
-                const bestMatch = [...relevantVars, ...otherVars].find(k => k.toLowerCase() === v.toLowerCase());
+                // Check for "Best Match" (normalized name match)
+                const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const vNorm = normalize(v);
+                
+                const findBest = (list: string[]) => list.find(k => normalize(k) === vNorm);
+                const bestMatch = findBest(relevantVars) || findBest(otherVars);
 
                 return (
                   <div key={v} className={`p-3 rounded border transition ${isMapped ? 'border-slate-200 bg-white' : 'border-amber-300 bg-amber-50'}`}>
