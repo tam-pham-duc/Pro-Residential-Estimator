@@ -42,6 +42,7 @@ export type DynamicColumn = {
   category?: string;
   subCategory?: string;
   itemGroup?: string;
+  materialName?: string;
 };
 
 export type Client = {

@@ -66,8 +66,9 @@ const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: Dynami
       
       // Branch-scoped filtering
       if (dc.scope === 'category' && dc.category && dc.category !== item.category) return false;
-      if (dc.scope === 'subcategory' && (dc.category !== item.category || dc.subCategory !== item.sub_category)) return false;
-      if (dc.scope === 'itemgroup' && (dc.category !== item.category || dc.subCategory !== item.sub_category || dc.itemGroup !== (item.sub_item_1 || ''))) return false;
+      if (dc.scope === 'subcategory' && (dc.category !== item.category || (dc.subCategory && dc.subCategory !== item.sub_category))) return false;
+      if (dc.scope === 'itemgroup' && (dc.category !== item.category || (dc.subCategory && dc.subCategory !== item.sub_category) || (dc.itemGroup && dc.itemGroup !== (item.sub_item_1 || '')))) return false;
+      if (dc.scope === 'material' && (dc.category !== item.category || (dc.subCategory && dc.subCategory !== item.sub_category) || (dc.itemGroup && dc.itemGroup !== (item.sub_item_1 || '')) || (dc.materialName && dc.materialName !== item.item_name))) return false;
       
       return true;
     })
@@ -219,11 +220,12 @@ export default function EstimatorApp() {
   const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
 
-  const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(true);
+  const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<DynamicColumn | null>(null);
   const [colScopeL1, setColScopeL1] = useState("");
   const [colScopeL2, setColScopeL2] = useState("");
   const [colScopeL3, setColScopeL3] = useState("");
+  const [colScopeL4, setColScopeL4] = useState("");
   const [colScope, setColScope] = useState<'category' | 'subcategory' | 'itemgroup' | 'material' | 'global'>('material');
 
   useEffect(() => {
@@ -231,11 +233,13 @@ export default function EstimatorApp() {
       setColScopeL1(editingColumn.category || "");
       setColScopeL2(editingColumn.subCategory || "");
       setColScopeL3(editingColumn.itemGroup || "");
+      setColScopeL4(editingColumn.materialName || "");
       setColScope(editingColumn.scope);
     } else {
       setColScopeL1("");
       setColScopeL2("");
       setColScopeL3("");
+      setColScopeL4("");
       setColScope("material");
     }
   }, [editingColumn]);
@@ -249,6 +253,11 @@ export default function EstimatorApp() {
     if (!colScopeL1 || !colScopeL2) return [];
     return getUniqueVals(catalog.filter(i => i.category === colScopeL1 && i.sub_category === colScopeL2), 'sub_item_1');
   }, [catalog, colScopeL1, colScopeL2]);
+
+  const allMaterials = useMemo(() => {
+    if (!colScopeL1 || !colScopeL2 || !colScopeL3) return [];
+    return getUniqueVals(catalog.filter(i => i.category === colScopeL1 && i.sub_category === colScopeL2 && i.sub_item_1 === colScopeL3), 'item_name');
+  }, [catalog, colScopeL1, colScopeL2, colScopeL3]);
 
   const [dataTables, setDataTables] = useState<DataTable[]>([]);
   const [dataTableModalOpen, setDataTableModalOpen] = useState(false);
@@ -322,7 +331,7 @@ export default function EstimatorApp() {
       if (col.scope === 'category' && col.category && col.category !== item.category) isRelevant = false;
       if (col.scope === 'subcategory' && (col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category))) isRelevant = false;
       if (col.scope === 'itemgroup' && (col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category) || (col.itemGroup && col.itemGroup !== (item.sub_item_1 || '')))) isRelevant = false;
-      if (col.scope === 'material' && (col.category && col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category) || (col.itemGroup && col.itemGroup !== (item.sub_item_1 || '')))) isRelevant = false;
+      if (col.scope === 'material' && (col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category) || (col.itemGroup && col.itemGroup !== (item.sub_item_1 || '')) || (col.materialName && col.materialName !== item.item_name))) isRelevant = false;
       
       if (isRelevant && col.defaultValue !== undefined && col.defaultValue !== '') {
         // Convert to number if it's a number type
@@ -870,7 +879,13 @@ export default function EstimatorApp() {
       
       // Add default values from columns
       currentDynamicColumns.forEach(col => {
-        if (scope[col.key] === undefined && col.defaultValue !== undefined && col.defaultValue !== '') {
+        let isRelevant = true;
+        if (col.scope === 'category' && col.category && col.category !== item.category) isRelevant = false;
+        if (col.scope === 'subcategory' && (col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category))) isRelevant = false;
+        if (col.scope === 'itemgroup' && (col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category) || (col.itemGroup && col.itemGroup !== (item.sub_item_1 || '')))) isRelevant = false;
+        if (col.scope === 'material' && (col.category !== item.category || (col.subCategory && col.subCategory !== item.sub_category) || (col.itemGroup && col.itemGroup !== (item.sub_item_1 || '')) || (col.materialName && col.materialName !== item.item_name))) isRelevant = false;
+
+        if (isRelevant && scope[col.key] === undefined && col.defaultValue !== undefined && col.defaultValue !== '') {
           const val = col.dataType === 'number' ? Number(col.defaultValue) : 
                       col.dataType === 'boolean' ? (col.defaultValue.toLowerCase() === 'true') : 
                       col.defaultValue;
@@ -2748,6 +2763,7 @@ export default function EstimatorApp() {
                   const category = (form.elements.namedItem('colCat') as HTMLSelectElement)?.value || undefined;
                   const subCategory = (form.elements.namedItem('colSubCat') as HTMLSelectElement)?.value || undefined;
                   const itemGroup = (form.elements.namedItem('colItemGroup') as HTMLSelectElement)?.value || undefined;
+                  const materialName = (form.elements.namedItem('colMaterial') as HTMLSelectElement)?.value || undefined;
                   const unit = (form.elements.namedItem('colUnit') as HTMLInputElement).value.trim();
                   const defaultValue = (form.elements.namedItem('colDefault') as HTMLInputElement).value.trim();
                   
@@ -2763,7 +2779,7 @@ export default function EstimatorApp() {
                   
                   let newCols = [...dynamicColumns];
                   if (editingColumn) {
-                    newCols = newCols.map(c => c.id === editingColumn.id ? { ...c, name, key, dataType, scope, unit, defaultValue, category, subCategory, itemGroup } : c);
+                    newCols = newCols.map(c => c.id === editingColumn.id ? { ...c, name, key, dataType, scope, unit, defaultValue, category, subCategory, itemGroup, materialName } : c);
                   } else {
                     if (newCols.some(c => c.key.toLowerCase() === key.toLowerCase())) {
                       alert("A column with this key already exists.");
@@ -2779,7 +2795,8 @@ export default function EstimatorApp() {
                       defaultValue,
                       category,
                       subCategory,
-                      itemGroup
+                      itemGroup,
+                      materialName
                     });
                   }
                   
@@ -2875,6 +2892,21 @@ export default function EstimatorApp() {
                         </select>
                       </div>
                     )}
+                    {colScope === 'material' && (
+                      <div className="w-full">
+                        <label className="block text-[10px] font-bold text-indigo-500 uppercase mb-1">Specific Material (L4)</label>
+                        <select 
+                          name="colMaterial" 
+                          value={colScopeL4} 
+                          onChange={(e) => setColScopeL4(e.target.value)}
+                          required 
+                          className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none"
+                        >
+                          <option value="">-- Select Material --</option>
+                          {allMaterials.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 )}
                 <div className="flex gap-3">
@@ -2925,6 +2957,7 @@ export default function EstimatorApp() {
                                 {c.category} 
                                 {c.subCategory && ` > ${c.subCategory}`} 
                                 {c.itemGroup && ` > ${c.itemGroup}`}
+                                {c.materialName && ` > ${c.materialName}`}
                               </div>
                             )}
                           </td>
@@ -2988,53 +3021,87 @@ export default function EstimatorApp() {
 
       {/* Mapping Modal */}
       {mappingModalOpen && templateToApply && (
-        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[70]">
-          <div className="bg-white rounded-lg shadow-2xl w-full max-w-md p-6 border-t-4 border-indigo-500">
-            <h2 className="text-xl font-bold mb-4">Map Template Variables</h2>
-            <p className="text-sm text-slate-600 mb-4">
-              Template: <span className="font-bold text-indigo-600">{templateToApply.name}</span>
-            </p>
-            <div className="space-y-4 max-h-60 overflow-y-auto pr-2">
-              {templateToApply.variables.map(v => (
-                <div key={v}>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">{v}</label>
-                  <select 
-                    value={variableMappings[v] || ""}
-                    onChange={(e) => setVariableMappings(prev => ({ ...prev, [v]: e.target.value }))}
-                    className="w-full border p-2 rounded text-sm outline-none focus:ring-2 focus:ring-indigo-200"
-                  >
-                    <option value="">-- Select Variable --</option>
-                    {Object.keys(variableRegistry).map(regKey => (
-                      <option key={regKey} value={`[${regKey}]`}>{regKey}</option>
-                    ))}
-                    <option value="[Take-off]">Take-off</option>
-                    <option value="[Overage %]">Overage %</option>
-                    <option value="[Order]">Order</option>
-                  </select>
-                </div>
-              ))}
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[70]" onClick={() => setMappingModalOpen(false)}>
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-md p-6 border-t-4 border-indigo-500" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Map Template Variables</h2>
+              <button onClick={() => setMappingModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
             </div>
-            <div className="flex justify-end gap-2 mt-6">
+            
+            <div className="bg-indigo-50 p-3 rounded border border-indigo-100 mb-4">
+              <p className="text-xs text-indigo-800">
+                The template <span className="font-bold">&quot;{templateToApply.name}&quot;</span> contains variables that need to be mapped to your project&apos;s data.
+              </p>
+            </div>
+
+            <div className="space-y-4 max-h-80 overflow-y-auto pr-2">
+              {templateToApply.variables.map(v => {
+                const isMapped = !!variableMappings[v];
+                return (
+                  <div key={v} className={`p-3 rounded border transition ${isMapped ? 'border-slate-200 bg-white' : 'border-amber-300 bg-amber-50'}`}>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        Template Variable: <span className="text-indigo-600">[{v}]</span>
+                      </label>
+                      {!isMapped && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">Required</span>}
+                    </div>
+                    <select 
+                      value={variableMappings[v] || ""}
+                      onChange={(e) => setVariableMappings(prev => ({ ...prev, [v]: e.target.value }))}
+                      className={`w-full border p-2 rounded text-sm outline-none focus:ring-2 transition ${isMapped ? 'border-slate-300 focus:ring-indigo-200' : 'border-amber-400 focus:ring-amber-200'}`}
+                    >
+                      <option value="">-- Select Project Variable --</option>
+                      <optgroup label="Built-in Variables">
+                        <option value="[Take-off]">Take-off (Primary measurement)</option>
+                        <option value="[Overage %]">Overage % (Waste factor)</option>
+                        <option value="[Order]">Order (Packaging/Unit size)</option>
+                      </optgroup>
+                      
+                      {Object.keys(variableRegistry).length > 0 && (
+                        <optgroup label="Project Variables (Custom & Dynamic)">
+                          {Object.entries(variableRegistry).map(([regKey, info]) => (
+                            <option key={regKey} value={`[${regKey}]`}>
+                              {regKey} ({info.scope === 'global' ? 'Global' : 'Dynamic'})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6 pt-4 border-t">
               <button 
                 onClick={() => setMappingModalOpen(false)}
-                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded transition"
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded transition"
               >
                 Cancel
               </button>
               <button 
                 onClick={() => {
+                  const unmapped = templateToApply.variables.filter(v => !variableMappings[v]);
+                  if (unmapped.length > 0) {
+                    if (!window.confirm(`You haven't mapped: ${unmapped.join(', ')}. These will remain as placeholders in the formula. Continue?`)) {
+                      return;
+                    }
+                  }
+
                   let finalFormula = templateToApply.formula;
                   Object.entries(variableMappings).forEach(([tplVar, mappedVar]) => {
                     if (mappedVar) {
-                      finalFormula = finalFormula.split(`[${tplVar}]`).join(mappedVar);
+                      // Use regex with global flag to replace all occurrences
+                      const escapedVar = `[${tplVar}]`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                      finalFormula = finalFormula.replace(new RegExp(escapedVar, 'g'), mappedVar);
                     }
                   });
                   setCustomFormula(finalFormula);
                   setMappingModalOpen(false);
                 }}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded transition"
+                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded shadow-sm transition"
               >
-                Apply Formula
+                Apply to Formula
               </button>
             </div>
           </div>
