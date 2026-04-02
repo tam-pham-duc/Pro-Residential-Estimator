@@ -7,7 +7,7 @@ import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate,
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
-  Undo2, Redo2, Copy, Users
+  Undo2, Redo2, Copy, Users, Folder
 } from 'lucide-react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
@@ -184,6 +184,8 @@ export default function EstimatorApp() {
   const [clients, setClients] = useState<Client[]>([]);
   const [clientModalOpen, setClientModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<string | null>(null);
   const [jobNotes, setJobNotes] = useState("");
   const [currentJobId, setCurrentJobId] = useState("");
   const [savedJobs, setSavedJobs] = useState<Record<string, Job>>({});
@@ -1590,6 +1592,9 @@ export default function EstimatorApp() {
             <button onClick={() => setClientModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
               <Users size={16} /> Clients
             </button>
+            <button onClick={() => setProjectModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+              <Folder size={16} /> Projects
+            </button>
             <button onClick={() => setDynamicColumnsModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
               Columns
             </button>
@@ -2277,6 +2282,161 @@ export default function EstimatorApp() {
                   </table>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Project Management Modal */}
+      {projectModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl p-6 border-t-4 border-emerald-500 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Manage Projects</h2>
+              <div className="flex items-center gap-4">
+                <button 
+                  onClick={() => {
+                    setProjectModalOpen(false);
+                    setNewProjectData({ name: '', client: '', description: '', templateId: '' });
+                    setNewProjectModalOpen(true);
+                  }} 
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-sm font-bold flex items-center gap-1"
+                >
+                  <Plus size={16} /> New Project
+                </button>
+                <button onClick={() => { setProjectModalOpen(false); setEditingProject(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+              </div>
+            </div>
+            
+            <div className="overflow-y-auto flex-1 border rounded bg-white">
+              {Object.keys(savedJobs).length === 0 ? (
+                <div className="p-8 text-center text-slate-500 italic">No saved projects found.</div>
+              ) : (
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 sticky top-0 shadow-sm">
+                    <tr>
+                      <th className="p-3 border-b font-bold text-slate-600">Project Name</th>
+                      <th className="p-3 border-b font-bold text-slate-600">Client</th>
+                      <th className="p-3 border-b font-bold text-slate-600">Last Saved</th>
+                      <th className="p-3 border-b font-bold text-slate-600">Notes</th>
+                      <th className="p-3 border-b font-bold text-slate-600 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(savedJobs).sort((a, b) => new Date(b[1].lastSaved).getTime() - new Date(a[1].lastSaved).getTime()).map(([id, job]) => (
+                      <tr key={id} className="border-b last:border-0 hover:bg-slate-50">
+                        {editingProject === id ? (
+                          <td colSpan={5} className="p-4 bg-emerald-50/50">
+                            <form 
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                const formData = new FormData(e.currentTarget);
+                                const newName = formData.get('projectName') as string;
+                                const newClient = formData.get('clientName') as string;
+                                const newNotes = formData.get('jobNotes') as string;
+                                
+                                const updatedJobs = { ...savedJobs };
+                                updatedJobs[id] = {
+                                  ...updatedJobs[id],
+                                  projectName: newName,
+                                  clientName: newClient,
+                                  jobNotes: newNotes
+                                };
+                                
+                                setSavedJobs(updatedJobs);
+                                localStorage.setItem('savedEstimatingJobs', JSON.stringify(updatedJobs));
+                                
+                                if (currentJobId === id) {
+                                  setProjectName(newName);
+                                  setClientName(newClient);
+                                  setJobNotes(newNotes);
+                                }
+                                
+                                setEditingProject(null);
+                              }}
+                              className="flex flex-col gap-3"
+                            >
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-600 mb-1">Project Name</label>
+                                  <input name="projectName" defaultValue={job.projectName} className="w-full border p-2 rounded text-sm" required />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-600 mb-1">Client</label>
+                                  <select name="clientName" defaultValue={job.clientName} className="w-full border p-2 rounded text-sm">
+                                    <option value="">-- Select Client --</option>
+                                    {clients.map(c => (
+                                      <option key={c.id} value={c.name}>{c.name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold text-slate-600 mb-1">Notes</label>
+                                <textarea name="jobNotes" defaultValue={job.jobNotes} className="w-full border p-2 rounded text-sm h-20"></textarea>
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <button type="button" onClick={() => setEditingProject(null)} className="px-3 py-1 text-slate-600 hover:bg-slate-200 rounded text-sm font-bold">Cancel</button>
+                                <button type="submit" className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-sm font-bold">Save Changes</button>
+                              </div>
+                            </form>
+                          </td>
+                        ) : (
+                          <>
+                            <td className="p-3 font-bold text-slate-800">{job.projectName || 'Untitled'}</td>
+                            <td className="p-3 text-slate-600">{job.clientName || '-'}</td>
+                            <td className="p-3 text-slate-500 text-xs">{new Date(job.lastSaved).toLocaleString()}</td>
+                            <td className="p-3 text-slate-500 text-xs max-w-[200px] truncate" title={job.jobNotes}>{job.jobNotes || '-'}</td>
+                            <td className="p-3 text-right space-x-2 whitespace-nowrap">
+                              <button 
+                                onClick={() => {
+                                  setCurrentJobId(id);
+                                  setProjectName(job.projectName || "");
+                                  setClientName(job.clientName || "");
+                                  setJobNotes(job.jobNotes || "");
+                                  setTakeoffData(job.takeoffData || {});
+                                  setActionHistory(job.history || []);
+                                  setHistoryIndex(0);
+                                  if (job.customVariables) setCustomVariables(job.customVariables);
+                                  if (job.dynamicColumns) setDynamicColumns(job.dynamicColumns);
+                                  if (job.entityData) setEntityData(job.entityData);
+                                  if (job.formulaPresets) setFormulaPresets(job.formulaPresets);
+                                  setProjectModalOpen(false);
+                                }}
+                                className="text-emerald-600 hover:text-emerald-800 text-xs font-bold px-2 py-1 bg-emerald-50 rounded"
+                              >
+                                Load
+                              </button>
+                              <button 
+                                onClick={() => setEditingProject(id)}
+                                className="text-blue-600 hover:text-blue-800 text-xs font-bold px-2 py-1 bg-blue-50 rounded"
+                              >
+                                Edit
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  if (window.confirm(`Delete project "${job.projectName}"? This cannot be undone.`)) {
+                                    const newJobs = { ...savedJobs };
+                                    delete newJobs[id];
+                                    setSavedJobs(newJobs);
+                                    localStorage.setItem('savedEstimatingJobs', JSON.stringify(newJobs));
+                                    if (currentJobId === id) {
+                                      setCurrentJobId("");
+                                    }
+                                  }
+                                }}
+                                className="text-red-600 hover:text-red-800 text-xs font-bold px-2 py-1 bg-red-50 rounded"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>
