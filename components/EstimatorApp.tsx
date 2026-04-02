@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
-import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals } from '@/lib/estimator-utils';
+import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables } from '@/lib/estimator-utils';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
@@ -2326,13 +2326,12 @@ export default function EstimatorApp() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Value (number)</label>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Value or Formula</label>
                   <input 
-                    type="number" 
+                    type="text" 
                     id="cv-value"
-                    defaultValue={editingCustomVar?.value || ''}
-                    placeholder="e.g. 1.15"
-                    step="any"
+                    defaultValue={editingCustomVar?.formula || editingCustomVar?.value || ''}
+                    placeholder="e.g. 1.15 or [OtherVar] * 2"
                     className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-amber-200 outline-none"
                   />
                 </div>
@@ -2362,21 +2361,21 @@ export default function EstimatorApp() {
                       const descInput = document.getElementById('cv-desc') as HTMLInputElement;
                       
                       const name = nameInput.value.trim().replace(/\s+/g, '_');
-                      const value = parseFloat(valueInput.value);
+                      const formula = valueInput.value.trim();
                       const desc = descInput.value.trim();
                       
                       if (!name) {
                         alert("Please enter a variable name.");
                         return;
                       }
-                      if (isNaN(value)) {
-                        alert("Please enter a valid numeric value.");
+                      if (!formula) {
+                        alert("Please enter a value or formula.");
                         return;
                       }
                       
                       let newVars = [...customVariables];
                       if (editingCustomVar) {
-                        newVars = newVars.map(v => v.id === editingCustomVar.id ? { ...v, name, value, description: desc } : v);
+                        newVars = newVars.map(v => v.id === editingCustomVar.id ? { ...v, name, formula, description: desc } : v);
                       } else {
                         // Check for duplicates
                         if (newVars.some(v => v.name.toLowerCase() === name.toLowerCase()) || 
@@ -2387,10 +2386,14 @@ export default function EstimatorApp() {
                         newVars.push({
                           id: "CV-" + Date.now(),
                           name,
-                          value,
+                          formula,
+                          value: 0,
                           description: desc
                         });
                       }
+                      
+                      // Recalculate custom variables
+                      newVars = recalculateCustomVariables(newVars);
                       
                       // Recalculate all auto formulas with new variables
                       const { newData, hasChanges } = recalculateAllFormulas(newVars, entityData);
@@ -2430,7 +2433,13 @@ export default function EstimatorApp() {
                       {customVariables.map(v => (
                         <tr key={v.id} className="border-b last:border-0 hover:bg-slate-50">
                           <td className="p-2 font-mono text-xs text-amber-700">[{v.name}]</td>
-                          <td className="p-2 font-mono text-xs">{v.value}</td>
+                          <td className="p-2 font-mono text-xs">
+                            {v.formula && v.formula !== v.value.toString() ? (
+                              <span title={`Formula: ${v.formula}`}>{v.value} <span className="text-slate-400 text-[10px]">(fx)</span></span>
+                            ) : (
+                              v.value
+                            )}
+                          </td>
                           <td className="p-2 text-right">
                             <button 
                               onClick={() => {
@@ -2441,7 +2450,7 @@ export default function EstimatorApp() {
                                   const valueInput = document.getElementById('cv-value') as HTMLInputElement;
                                   const descInput = document.getElementById('cv-desc') as HTMLInputElement;
                                   if (nameInput) nameInput.value = v.name;
-                                  if (valueInput) valueInput.value = v.value.toString();
+                                  if (valueInput) valueInput.value = v.formula || v.value.toString();
                                   if (descInput) descInput.value = v.description || '';
                                 }, 10);
                               }}
@@ -2452,7 +2461,10 @@ export default function EstimatorApp() {
                             <button 
                               onClick={() => {
                                 if (window.confirm(`Delete variable [${v.name}]?`)) {
-                                  const newVars = customVariables.filter(cv => cv.id !== v.id);
+                                  let newVars = customVariables.filter(cv => cv.id !== v.id);
+                                  
+                                  // Recalculate custom variables
+                                  newVars = recalculateCustomVariables(newVars);
                                   
                                   // Recalculate all auto formulas with new variables
                                   const { newData, hasChanges } = recalculateAllFormulas(newVars, entityData);

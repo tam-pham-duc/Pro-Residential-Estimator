@@ -27,6 +27,7 @@ export type CustomVariable = {
   id: string;
   name: string;
   value: number;
+  formula?: string;
   description: string;
 };
 

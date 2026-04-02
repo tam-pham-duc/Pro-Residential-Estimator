@@ -12,6 +12,61 @@ export function evaluateMath(inputStr: string | number): string | number {
     }
 }
 
+export function evaluateCustomVariableFormula(
+    formulaStr: string,
+    customVars: { name: string, value: number }[] = []
+): number {
+    if (!formulaStr) return 0;
+    
+    const scope: Record<string, any> = {};
+    customVars.forEach(cv => {
+        const safeName = cv.name.replace(/[^a-zA-Z0-9_]/g, '_');
+        scope[safeName] = cv.value;
+    });
+
+    let parsed = formulaStr.replace(/\[(.*?)\]/g, (match, p1) => {
+        return p1.replace(/[^a-zA-Z0-9_]/g, '_');
+    });
+
+    parsed = parsed.replace(/\bROUNDUP\b/ig, 'ceil')
+                   .replace(/\bROUNDDOWN\b/ig, 'floor')
+                   .replace(/\bROUND\b/ig, 'round')
+                   .replace(/\bCEILING\b/ig, 'ceil')
+                   .replace(/\bFLOOR\b/ig, 'floor')
+                   .replace(/\bMAX\b/ig, 'max')
+                   .replace(/\bMIN\b/ig, 'min')
+                   .replace(/\bABS\b/ig, 'abs')
+                   .replace(/\bSQRT\b/ig, 'sqrt')
+                   .replace(/\bPOWER\b/ig, 'pow')
+                   .replace(/\bIF\b/ig, 'ifElse');
+
+    scope.ifElse = function(condition: any, trueVal: any, falseVal: any) {
+        return condition ? trueVal : falseVal;
+    };
+
+    try {
+        let result = evaluate(parsed, scope);
+        if (isNaN(result) || !isFinite(result)) return 0;
+        return Math.round(result * 10000) / 10000; // Keep some precision
+    } catch(e: any) {
+        return 0; // Or throw error? Let's return 0 for now
+    }
+}
+
+export function recalculateCustomVariables(vars: { id: string, name: string, value: number, formula?: string, description: string }[]) {
+    let currentVars = [...vars];
+    // Do a few passes to resolve dependencies
+    for (let i = 0; i < 3; i++) {
+        currentVars = currentVars.map(v => {
+            if (v.formula) {
+                return { ...v, value: evaluateCustomVariableFormula(v.formula, currentVars) };
+            }
+            return v;
+        });
+    }
+    return currentVars;
+}
+
 export function evaluateCustomFormula(
     formulaStr: string, 
     takeoff: string | number, 
