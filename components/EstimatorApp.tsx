@@ -559,6 +559,58 @@ export default function EstimatorApp() {
     }
   }, [dynamicColumns, isMounted]);
 
+  const autoMapVariables = useCallback((template: FormulaTemplate, item: Item | undefined) => {
+    const mappings: Record<string, string> = {};
+    
+    template.variables.forEach(v => {
+      // 1. Check for built-in variables first
+      const vLower = v.toLowerCase();
+      if (vLower === 'take-off' || vLower === 'takeoff') {
+        mappings[v] = '[Take-off]';
+        return;
+      }
+      if (vLower === 'overage %' || vLower === 'overage') {
+        mappings[v] = '[Overage %]';
+        return;
+      }
+      if (vLower === 'order') {
+        mappings[v] = '[Order]';
+        return;
+      }
+
+      // 2. Find all potential matches in registry
+      const matches = Object.entries(variableRegistry).filter(([regKey]) => 
+        regKey.toLowerCase() === vLower
+      );
+
+      if (matches.length === 0) return;
+
+      // 3. If we have matches, prioritize by scope relevance to current item
+      if (item) {
+        const relevantMatch = matches.find(([_, info]) => {
+          if (info.scope === 'global') return true;
+          if (!info.col) return false;
+          const c = info.col;
+          if (c.scope === 'category' && c.category === item.category) return true;
+          if (c.scope === 'subcategory' && c.category === item.category && c.subCategory === item.sub_category) return true;
+          if (c.scope === 'itemgroup' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '')) return true;
+          if (c.scope === 'material' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '') && c.materialName === item.item_name) return true;
+          return false;
+        });
+
+        if (relevantMatch) {
+          mappings[v] = `[${relevantMatch[0]}]`;
+          return;
+        }
+      }
+
+      // 4. Fallback to first case-insensitive match if no scope-relevant match found
+      mappings[v] = `[${matches[0][0]}]`;
+    });
+    
+    return mappings;
+  }, [variableRegistry]);
+
   const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaTemplates = formulaTemplates, newDataTables = dataTables) => {
     const snapshot: HistoryRecord = {
       timestamp: new Date().toISOString(),
@@ -3159,11 +3211,28 @@ export default function EstimatorApp() {
               <button onClick={() => setMappingModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
             </div>
             
-            <div className="bg-indigo-50 p-3 rounded border border-indigo-100 mb-4">
+            <div className="bg-indigo-50 p-3 rounded border border-indigo-100 mb-4 flex justify-between items-center">
               <p className="text-xs text-indigo-800">
-                The template <span className="font-bold">&quot;{templateToApply.name}&quot;</span> contains variables that need to be mapped to your project&apos;s data.
+                The template <span className="font-bold">&quot;{templateToApply.name}&quot;</span> requires mapping.
               </p>
+              <button 
+                onClick={() => {
+                  const item = catalog.find(i => i.item_id === qtyPanelItemId);
+                  const newMappings = autoMapVariables(templateToApply, item);
+                  setVariableMappings(newMappings);
+                }}
+                className="text-[10px] bg-indigo-600 text-white px-2 py-1 rounded font-bold hover:bg-indigo-700 transition"
+              >
+                Auto-map All
+              </button>
             </div>
+
+            {templateToApply.variables.filter(v => !variableMappings[v]).length > 0 && (
+              <div className="mb-4 p-2 bg-amber-50 border border-amber-200 rounded flex items-center gap-2 text-amber-700">
+                <div className="bg-amber-500 text-white rounded-full p-0.5"><X size={10} /></div>
+                <span className="text-[10px] font-bold">Some required variables are not yet mapped.</span>
+              </div>
+            )}
 
             <div className="space-y-4 max-h-80 overflow-y-auto pr-2">
               {templateToApply.variables.map(v => {
@@ -3212,10 +3281,13 @@ export default function EstimatorApp() {
                     </div>
                     
                     {bestMatch && !isMapped && (
-                      <div className="text-[10px] text-emerald-600 font-bold mb-1 flex items-center gap-1">
+                      <button 
+                        onClick={() => setVariableMappings(prev => ({ ...prev, [v]: `[${bestMatch}]` }))}
+                        className="text-[10px] text-emerald-600 font-bold mb-1 flex items-center gap-1 hover:bg-emerald-50 px-1 rounded transition w-full text-left"
+                      >
                         <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                        Suggested Match: [{bestMatch}]
-                      </div>
+                        Suggested Match: [{bestMatch}] (Click to apply)
+                      </button>
                     )}
 
                     <select 
@@ -3273,9 +3345,8 @@ export default function EstimatorApp() {
                 onClick={() => {
                   const unmapped = templateToApply.variables.filter(v => !variableMappings[v]);
                   if (unmapped.length > 0) {
-                    if (!window.confirm(`You haven't mapped: ${unmapped.join(', ')}. These will remain as placeholders in the formula. Continue?`)) {
-                      return;
-                    }
+                    alert(`Please map all variables before applying. Unmapped: ${unmapped.join(', ')}`);
+                    return;
                   }
 
                   // Confirmation for shared variables
@@ -3285,7 +3356,7 @@ export default function EstimatorApp() {
                   
                   const sharedVars = mappedKeys.filter(k => isVariableUsedInFormulas(k));
                   if (sharedVars.length > 0) {
-                    if (!window.confirm(`The following mapped variables are already used in other formulas: ${sharedVars.join(', ')}. Applying this template will link this item to these shared variables. Continue?`)) {
+                    if (!window.confirm(`CRITICAL: The following variables are already used in other formulas: ${sharedVars.join(', ')}.\n\nApplying this template will link this item to these shared variables. Any future changes to these variables will affect ALL linked items.\n\nDo you want to proceed with this shared mapping?`)) {
                       return;
                     }
                   }
@@ -3301,7 +3372,7 @@ export default function EstimatorApp() {
                   setCustomFormula(finalFormula);
                   setMappingModalOpen(false);
                 }}
-                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded shadow-sm transition"
+                className={`px-6 py-2 text-sm font-bold rounded shadow-sm transition ${templateToApply.variables.filter(v => !variableMappings[v]).length > 0 ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
               >
                 Apply to Formula
               </button>
@@ -3774,55 +3845,8 @@ export default function EstimatorApp() {
                             if (template) {
                               if (template.variables.length > 0) {
                                 setTemplateToApply(template);
-                                // Auto-map variables if they exist in registry (case-insensitive and scope-aware)
-                                const initialMappings: Record<string, string> = {};
                                 const item = catalog.find(i => i.item_id === qtyPanelItemId);
-                                
-                                template.variables.forEach(v => {
-                                  // 1. Check for built-in variables first
-                                  const vLower = v.toLowerCase();
-                                  if (vLower === 'take-off' || vLower === 'takeoff') {
-                                    initialMappings[v] = '[Take-off]';
-                                    return;
-                                  }
-                                  if (vLower === 'overage %' || vLower === 'overage') {
-                                    initialMappings[v] = '[Overage %]';
-                                    return;
-                                  }
-                                  if (vLower === 'order') {
-                                    initialMappings[v] = '[Order]';
-                                    return;
-                                  }
-
-                                  // 2. Find all potential matches in registry
-                                  const matches = Object.entries(variableRegistry).filter(([regKey]) => 
-                                    regKey.toLowerCase() === vLower
-                                  );
-
-                                  if (matches.length === 0) return;
-
-                                  // 3. If we have matches, prioritize by scope relevance to current item
-                                  if (item) {
-                                    const relevantMatch = matches.find(([_, info]) => {
-                                      if (info.scope === 'global') return true;
-                                      if (!info.col) return false;
-                                      const c = info.col;
-                                      if (c.scope === 'category' && c.category === item.category) return true;
-                                      if (c.scope === 'subcategory' && c.category === item.category && c.subCategory === item.sub_category) return true;
-                                      if (c.scope === 'itemgroup' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '')) return true;
-                                      if (c.scope === 'material' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '') && c.materialName === item.item_name) return true;
-                                      return false;
-                                    });
-
-                                    if (relevantMatch) {
-                                      initialMappings[v] = `[${relevantMatch[0]}]`;
-                                      return;
-                                    }
-                                  }
-
-                                  // 4. Fallback to first case-insensitive match if no scope-relevant match found
-                                  initialMappings[v] = `[${matches[0][0]}]`;
-                                });
+                                const initialMappings = autoMapVariables(template, item);
                                 setVariableMappings(initialMappings);
                                 setMappingModalOpen(true);
                               } else {
