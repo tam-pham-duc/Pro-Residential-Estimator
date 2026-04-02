@@ -2091,11 +2091,11 @@ export default function EstimatorApp() {
       {/* Toolbar */}
       <div className="bg-white border-b border-slate-200 shadow-sm mb-6 sticky top-0 z-40">
         <div className="max-w-[98%] mx-auto px-4 py-3 flex flex-col md:flex-row justify-between items-center gap-4">
-          <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 w-full md:w-1/4">
+          <div className="flex flex-col items-stretch md:items-start gap-2 w-full md:w-1/4">
             <select 
               value={currentJobId} 
               onChange={loadJobFromSelect} 
-              className="border border-slate-300 rounded p-2 text-sm font-bold text-slate-700 w-full md:w-auto flex-1 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
+              className="border border-slate-300 rounded p-2 text-sm font-bold text-slate-700 w-full focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
             >
               <option value="">-- Create New Job --</option>
               {Object.entries(savedJobs).map(([id, job]) => (
@@ -2104,15 +2104,17 @@ export default function EstimatorApp() {
                 </option>
               ))}
             </select>
-            <button onClick={saveCurrentJob} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1">
-              <Save size={16} /> Save
-            </button>
-            <button onClick={saveAsTemplate} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
-              <Save size={16} /> Save Template
-            </button>
-            <button onClick={() => setTemplateModalOpen(true)} className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
-              <Copy size={16} /> Templates
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={saveCurrentJob} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1">
+                <Save size={16} /> Save
+              </button>
+              <button onClick={saveAsTemplate} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
+                <Save size={16} /> Save Template
+              </button>
+              <button onClick={() => setTemplateModalOpen(true)} className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
+                <Copy size={16} /> Templates
+              </button>
+            </div>
           </div>
           <div className="w-full md:flex-1 flex flex-col md:flex-row items-center justify-center gap-2">
             <div className="relative w-full md:max-w-md">
@@ -2151,51 +2153,55 @@ export default function EstimatorApp() {
               </div>
             )}
           </div>
-          <div className="flex flex-wrap items-center justify-center md:justify-end gap-2 w-full md:w-1/4 text-sm">
-            <button 
-              onClick={undo} 
-              disabled={!canUndo}
-              className={`px-3 py-2 rounded font-bold flex items-center gap-1 transition ${canUndo ? 'text-slate-700 bg-slate-200 hover:bg-slate-300' : 'text-slate-400 bg-slate-100 cursor-not-allowed'}`}
-              title="Undo"
-            >
-              <Undo2 size={16} />
-            </button>
-            <button 
-              onClick={redo} 
-              disabled={!canRedo}
-              className={`px-3 py-2 rounded font-bold flex items-center gap-1 transition ${canRedo ? 'text-slate-700 bg-slate-200 hover:bg-slate-300' : 'text-slate-400 bg-slate-100 cursor-not-allowed'}`}
-              title="Redo"
-            >
-              <Redo2 size={16} />
-            </button>
-            <button onClick={() => setClientModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
-              <Users size={16} /> Clients
-            </button>
-            <button onClick={() => setProjectModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
-              <Folder size={16} /> Projects
-            </button>
-            <button onClick={() => setDynamicColumnsModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
-              <Columns size={16} /> Dynamic Columns
-            </button>
-            <button onClick={() => setDataTableModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
-              <Table size={16} /> Data Tables
-            </button>
-            <button onClick={() => setHistoryModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
-              <History size={16} /> History
-            </button>
-            <button onClick={exportJobJson} className="bg-white border border-slate-300 hover:bg-slate-50 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
-              <Download size={16} /> JSON
-            </button>
-            <input 
-              type="file" 
-              accept=".json" 
-              className="hidden" 
-              ref={fileInputRef} 
-              onChange={importJobJson} 
-            />
-            <button onClick={() => fileInputRef.current?.click()} className="bg-white border border-slate-300 hover:bg-slate-50 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
-              <Upload size={16} /> Import
-            </button>
+          <div className="flex flex-col items-center md:items-end gap-2 w-full md:w-1/4 text-sm">
+            <div className="flex flex-wrap justify-center md:justify-end gap-2 w-full">
+              <button 
+                onClick={undo} 
+                disabled={!canUndo}
+                className={`px-3 py-2 rounded font-bold flex items-center gap-1 transition ${canUndo ? 'text-slate-700 bg-slate-200 hover:bg-slate-300' : 'text-slate-400 bg-slate-100 cursor-not-allowed'}`}
+                title="Undo"
+              >
+                <Undo2 size={16} />
+              </button>
+              <button 
+                onClick={redo} 
+                disabled={!canRedo}
+                className={`px-3 py-2 rounded font-bold flex items-center gap-1 transition ${canRedo ? 'text-slate-700 bg-slate-200 hover:bg-slate-300' : 'text-slate-400 bg-slate-100 cursor-not-allowed'}`}
+                title="Redo"
+              >
+                <Redo2 size={16} />
+              </button>
+              <button onClick={() => setHistoryModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <History size={16} /> History
+              </button>
+              <button onClick={exportJobJson} className="bg-white border border-slate-300 hover:bg-slate-50 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Download size={16} /> Export
+              </button>
+              <input 
+                type="file" 
+                accept=".json" 
+                className="hidden" 
+                ref={fileInputRef} 
+                onChange={importJobJson} 
+              />
+              <button onClick={() => fileInputRef.current?.click()} className="bg-white border border-slate-300 hover:bg-slate-50 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Upload size={16} /> Import
+              </button>
+            </div>
+            <div className="flex flex-wrap justify-center md:justify-end gap-2 w-full">
+              <button onClick={() => setClientModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Users size={16} /> Clients
+              </button>
+              <button onClick={() => setProjectModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Folder size={16} /> Projects
+              </button>
+              <button onClick={() => setDynamicColumnsModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Columns size={16} /> Dynamic Columns
+              </button>
+              <button onClick={() => setDataTableModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Table size={16} /> Data Tables
+              </button>
+            </div>
           </div>
         </div>
       </div>
