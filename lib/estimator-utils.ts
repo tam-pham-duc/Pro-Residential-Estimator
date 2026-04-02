@@ -155,7 +155,8 @@ export function evaluateCustomFormula(
     overage: string | number, 
     order: string | number,
     customVars: { name: string, value: number }[] = [],
-    dynamicScope: Record<string, any> = {}
+    dynamicScope: Record<string, any> = {},
+    dataTables: any[] = []
 ): string | number {
     if (!formulaStr) return "";
     
@@ -170,6 +171,14 @@ export function evaluateCustomFormula(
         Overage: o,
         Order: ord,
         ...dynamicScope
+    };
+
+    // Add LOOKUP function
+    scope.LOOKUP = function(tableName: string, searchCol: string, searchVal: any, resultCol: string) {
+        const table = dataTables.find(dt => dt.name === tableName);
+        if (!table) return 0;
+        const row = table.rows.find((r: any) => r[searchCol] == searchVal);
+        return row ? row[resultCol] : 0;
     };
 
     customVars.forEach(cv => {

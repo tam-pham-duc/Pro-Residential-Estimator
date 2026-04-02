@@ -50,6 +50,13 @@ export type Client = {
   notes?: string;
 };
 
+export interface DataTable {
+  id: string;
+  name: string;
+  columns: { name: string, key: string, type: 'string' | 'number' }[];
+  rows: Record<string, any>[];
+}
+
 export type HistoryRecord = {
   timestamp: string;
   action: string;
@@ -62,6 +69,7 @@ export type HistoryRecord = {
   dynamicColumns?: DynamicColumn[];
   entityData?: Record<string, Record<string, any>>;
   formulaTemplates?: FormulaTemplate[];
+  dataTables?: DataTable[];
 };
 
 export type FormulaTemplate = {
@@ -86,6 +94,7 @@ export type Job = {
   dynamicColumns?: DynamicColumn[];
   entityData?: Record<string, Record<string, any>>;
   formulaTemplates?: FormulaTemplate[];
+  dataTables?: DataTable[];
 };
 
 export type ProjectTemplate = {
@@ -99,6 +108,7 @@ export type ProjectTemplate = {
   dynamicColumns?: DynamicColumn[];
   entityData?: Record<string, Record<string, any>>;
   formulaTemplates?: FormulaTemplate[];
+  dataTables?: DataTable[];
   defaultOveragePct?: string;
   jobNotes?: string;
   createdAt: string;

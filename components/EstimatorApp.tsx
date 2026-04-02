@@ -3,9 +3,9 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables, extractVariablesFromFormula } from '@/lib/estimator-utils';
-import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate } from '@/lib/types';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable } from '@/lib/types';
 import { 
-  Home, Plus, Download, Save, Search, History, FileJson, Upload, 
+  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
   Undo2, Redo2, Copy, Users, Folder
 } from 'lucide-react';
@@ -135,6 +135,7 @@ const FORMULA_FUNCTIONS = [
   { name: 'MIN', description: 'Minimum of values', insert: 'MIN( , )', example: 'MIN([Take-off], 100)' },
   { name: 'CEILING', description: 'Round up to nearest integer', insert: 'CEILING( )', example: 'CEILING([Take-off] / [Order])' },
   { name: 'FLOOR', description: 'Round down to nearest integer', insert: 'FLOOR( )', example: 'FLOOR([Take-off] / [Order])' },
+  { name: 'LOOKUP', description: 'Lookup value in a data table', insert: 'LOOKUP("TableName", "SearchCol", SearchVal, "ResultCol")', example: 'LOOKUP("LaborRates", "Trade", "Carpenter", "Rate")' },
 ];
 
 function DebouncedInput({ 
@@ -216,6 +217,10 @@ export default function EstimatorApp() {
 
   const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<DynamicColumn | null>(null);
+
+  const [dataTables, setDataTables] = useState<DataTable[]>([]);
+  const [dataTableModalOpen, setDataTableModalOpen] = useState(false);
+  const [editingDataTable, setEditingDataTable] = useState<DataTable | null>(null);
 
   const moveColumn = (index: number, direction: 'up' | 'down') => {
     const newCols = [...dynamicColumns];
@@ -457,6 +462,13 @@ export default function EstimatorApp() {
       }
     }
 
+    const savedDataTables = localStorage.getItem('userDataTables');
+    if (savedDataTables) {
+      try {
+        setDataTables(JSON.parse(savedDataTables));
+      } catch (e) {}
+    }
+
     const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
     setSavedJobs(jobs);
     
@@ -475,7 +487,7 @@ export default function EstimatorApp() {
     setIsMounted(true);
   }, []);
 
-  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaTemplates = formulaTemplates) => {
+  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaTemplates = formulaTemplates, newDataTables = dataTables) => {
     const snapshot: HistoryRecord = {
       timestamp: new Date().toISOString(),
       action: actionDescription,
@@ -487,7 +499,8 @@ export default function EstimatorApp() {
       customVariables: JSON.parse(JSON.stringify(newCustomVars)),
       dynamicColumns: JSON.parse(JSON.stringify(newDynamicColumns)),
       entityData: JSON.parse(JSON.stringify(newEntityData)),
-      formulaTemplates: JSON.parse(JSON.stringify(newFormulaTemplates))
+      formulaTemplates: JSON.parse(JSON.stringify(newFormulaTemplates)),
+      dataTables: JSON.parse(JSON.stringify(newDataTables))
     };
     
     // Prevent duplicate history records using refs to ensure we have the latest state
@@ -504,7 +517,8 @@ export default function EstimatorApp() {
         currentRecord.jobNotes === snapshot.jobNotes &&
         JSON.stringify(currentRecord.customVariables) === JSON.stringify(snapshot.customVariables) &&
         JSON.stringify(currentRecord.dynamicColumns) === JSON.stringify(snapshot.dynamicColumns) &&
-        JSON.stringify(currentRecord.entityData) === JSON.stringify(snapshot.entityData)
+        JSON.stringify(currentRecord.entityData) === JSON.stringify(snapshot.entityData) &&
+        JSON.stringify(currentRecord.dataTables) === JSON.stringify(snapshot.dataTables)
       ) {
         return; // No changes detected
       }
@@ -539,6 +553,7 @@ export default function EstimatorApp() {
       if (record.dynamicColumns) setDynamicColumns(record.dynamicColumns);
       if (record.entityData) setEntityData(record.entityData);
       if (record.formulaTemplates) setFormulaTemplates(record.formulaTemplates);
+      if (record.dataTables) setDataTables(record.dataTables);
       setHistoryIndex(newIndex);
     }
   }, [canUndo, historyIndex, actionHistory]);
@@ -559,6 +574,7 @@ export default function EstimatorApp() {
       if (record.dynamicColumns) setDynamicColumns(record.dynamicColumns);
       if (record.entityData) setEntityData(record.entityData);
       if (record.formulaTemplates) setFormulaTemplates(record.formulaTemplates);
+      if (record.dataTables) setDataTables(record.dataTables);
       setHistoryIndex(newIndex);
     }
   }, [canRedo, historyIndex, actionHistory]);
@@ -682,7 +698,7 @@ export default function EstimatorApp() {
     return map;
   }, [formulasHash]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const recalculateAffectedItems = useCallback((changedSources: string[], currentVars: CustomVariable[] = customVariables, currentEntityData: Record<string, Record<string, any>> = entityData, currentTakeoffData: Record<string, TakeoffItem> = takeoffData) => {
+  const recalculateAffectedItems = useCallback((changedSources: string[], currentVars: CustomVariable[] = customVariables, currentEntityData: Record<string, Record<string, any>> = entityData, currentTakeoffData: Record<string, TakeoffItem> = takeoffData, currentDataTables: DataTable[] = dataTables) => {
     const affectedItems = new Set<string>();
     const affectedVars = new Set<string>();
     
@@ -749,7 +765,8 @@ export default function EstimatorApp() {
           newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
           newData[itemId].order_qty,
           newVars,
-          scope
+          scope,
+          currentDataTables
         ).toString();
         
         if (newQty !== newData[itemId].measured_qty) {
@@ -764,7 +781,7 @@ export default function EstimatorApp() {
     }
     
     return { newData, hasChanges, newVars };
-  }, [dependencyMap, customVariables, takeoffData, catalog, defaultOveragePct, entityData, dynamicColumns, resolveDynamicScope]);
+  }, [dependencyMap, customVariables, takeoffData, catalog, defaultOveragePct, entityData, dynamicColumns, resolveDynamicScope, dataTables]);
 
   const handleDefaultOverageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -1770,6 +1787,9 @@ export default function EstimatorApp() {
             </button>
             <button onClick={() => setDynamicColumnsModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
               Columns
+            </button>
+            <button onClick={() => setDataTableModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+              <Table size={16} /> Data Tables
             </button>
             <button onClick={() => setHistoryModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
               <History size={16} /> History
@@ -3975,6 +3995,253 @@ export default function EstimatorApp() {
               </table>
             </div>
             <button onClick={() => setHistoryModalOpen(false)} className="mt-4 bg-slate-200 hover:bg-slate-300 py-2 rounded font-bold transition">Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* Data Table Modal */}
+      {dataTableModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-60 flex justify-center items-center z-50">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-5xl p-6 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Manage Data Tables</h2>
+              <button onClick={() => { setDataTableModalOpen(false); setEditingDataTable(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            
+            <div className="flex flex-1 gap-6 overflow-hidden">
+              {/* Table List */}
+              <div className="w-1/4 border-r pr-4 overflow-y-auto">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-slate-700">Tables</h3>
+                  <button 
+                    onClick={() => {
+                      const name = window.prompt("Enter Table Name:");
+                      if (name) {
+                        const newTable: DataTable = {
+                          id: "DT-" + Date.now(),
+                          name,
+                          columns: [{ name: "ID", key: "id", type: "string" }],
+                          rows: []
+                        };
+                        const nextTables: DataTable[] = [...dataTables, newTable];
+                        setDataTables(nextTables);
+                        setEditingDataTable(newTable);
+                        localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                        recordHistory(`Added data table ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                      }
+                    }}
+                    className="text-emerald-600 hover:text-emerald-700"
+                  >
+                    <Plus size={20} />
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {dataTables.map(dt => (
+                    <div 
+                      key={dt.id}
+                      onClick={() => setEditingDataTable(dt)}
+                      className={`p-3 rounded border cursor-pointer transition-colors flex justify-between items-center ${editingDataTable?.id === dt.id ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'hover:bg-slate-50 border-slate-200'}`}
+                    >
+                      <span className="font-medium truncate">{dt.name}</span>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Delete table ${dt.name}?`)) {
+                            const nextTables: DataTable[] = dataTables.filter(t => t.id !== dt.id);
+                            setDataTables(nextTables);
+                            if (editingDataTable?.id === dt.id) setEditingDataTable(null);
+                            localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                            recordHistory(`Deleted data table ${dt.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                          }
+                        }}
+                        className="text-slate-400 hover:text-red-500"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Table Editor */}
+              <div className="flex-1 overflow-hidden flex flex-col">
+                {editingDataTable ? (
+                  <>
+                    <div className="flex justify-between items-center mb-4">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-bold text-lg">{editingDataTable.name}</h3>
+                        <button 
+                          onClick={() => {
+                            const newName = window.prompt("Rename Table:", editingDataTable.name);
+                            if (newName && newName !== editingDataTable.name) {
+                              const nextTables: DataTable[] = dataTables.map(t => t.id === editingDataTable.id ? { ...t, name: newName } : t);
+                              setDataTables(nextTables);
+                              setEditingDataTable({ ...editingDataTable, name: newName });
+                              localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                              recordHistory(`Renamed table ${editingDataTable.name} to ${newName}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                            }
+                          }}
+                          className="text-slate-400 hover:text-slate-600"
+                        >
+                          <Edit2 size={14} />
+                        </button>
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => {
+                            const colName = window.prompt("Column Name:");
+                            if (colName) {
+                              const colKey = colName.trim().replace(/\s+/g, '_');
+                              const colType = window.confirm("Is this a number column? (OK for Number, Cancel for Text)") ? 'number' : 'string';
+                              const nextTables: DataTable[] = dataTables.map(t => {
+                                if (t.id === editingDataTable.id) {
+                                  return { ...t, columns: [...t.columns, { name: colName, key: colKey, type: colType as 'string' | 'number' }] };
+                                }
+                                return t;
+                              });
+                              setDataTables(nextTables);
+                              setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                              localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                              recordHistory(`Added column ${colName} to ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                            }
+                          }}
+                          className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded text-xs font-bold flex items-center gap-1"
+                        >
+                          <Plus size={14} /> Add Column
+                        </button>
+                        <button 
+                          onClick={() => {
+                            const nextTables: DataTable[] = dataTables.map(t => {
+                              if (t.id === editingDataTable.id) {
+                                const newRow: Record<string, any> = {};
+                                t.columns.forEach(c => newRow[c.key] = c.type === 'number' ? 0 : '');
+                                return { ...t, rows: [...t.rows, newRow] };
+                              }
+                              return t;
+                            });
+                            setDataTables(nextTables);
+                            setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                            localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                            recordHistory(`Added row to ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                          }}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded text-xs font-bold flex items-center gap-1"
+                        >
+                          <Plus size={14} /> Add Row
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 overflow-auto border rounded bg-white">
+                      <table className="w-full text-sm border-collapse">
+                        <thead className="bg-slate-50 sticky top-0 z-10">
+                          <tr>
+                            {editingDataTable.columns.map((col, idx) => (
+                              <th key={idx} className="border p-2 text-left font-bold text-slate-600 group">
+                                <div className="flex justify-between items-center">
+                                  <span>{col.name} <span className="text-[10px] font-normal text-slate-400">({col.type})</span></span>
+                                  {col.key !== 'id' && (
+                                    <button 
+                                      onClick={() => {
+                                        if (window.confirm(`Delete column ${col.name}?`)) {
+                                          const nextTables: DataTable[] = dataTables.map(t => {
+                                            if (t.id === editingDataTable.id) {
+                                              return { 
+                                                ...t, 
+                                                columns: t.columns.filter(c => c.key !== col.key),
+                                                rows: t.rows.map(r => {
+                                                  const newRow = { ...r };
+                                                  delete newRow[col.key];
+                                                  return newRow;
+                                                })
+                                              };
+                                            }
+                                            return t;
+                                          });
+                                          setDataTables(nextTables);
+                                          setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                          localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                          recordHistory(`Deleted column ${col.name} from ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                                        }
+                                      }}
+                                      className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  )}
+                                </div>
+                              </th>
+                            ))}
+                            <th className="border p-2 w-10"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {editingDataTable.rows.map((row, rowIdx) => (
+                            <tr key={rowIdx} className="hover:bg-slate-50">
+                              {editingDataTable.columns.map((col, colIdx) => (
+                                <td key={colIdx} className="border p-1">
+                                  <input 
+                                    type={col.type === 'number' ? 'number' : 'text'}
+                                    value={row[col.key]}
+                                    onChange={(e) => {
+                                      const val = col.type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value;
+                                      const nextTables: DataTable[] = dataTables.map(t => {
+                                        if (t.id === editingDataTable.id) {
+                                          const nextRows = [...t.rows];
+                                          nextRows[rowIdx] = { ...nextRows[rowIdx], [col.key]: val };
+                                          return { ...t, rows: nextRows };
+                                        }
+                                        return t;
+                                      });
+                                      setDataTables(nextTables);
+                                      setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                      // Debounce saving to localStorage and history if needed, but for now direct
+                                      localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                    }}
+                                    onBlur={() => {
+                                      // Trigger recalculation when data changes
+                                      recalculateAffectedItems([], customVariables, entityData, takeoffData, dataTables);
+                                      recordHistory(`Updated data in ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, dataTables);
+                                    }}
+                                    className="w-full p-1 outline-none bg-transparent focus:bg-amber-50"
+                                  />
+                                </td>
+                              ))}
+                              <td className="border p-1 text-center">
+                                <button 
+                                  onClick={() => {
+                                    const nextTables: DataTable[] = dataTables.map(t => {
+                                      if (t.id === editingDataTable.id) {
+                                        return { ...t, rows: t.rows.filter((_, i) => i !== rowIdx) };
+                                      }
+                                      return t;
+                                    });
+                                    setDataTables(nextTables);
+                                    setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                    localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                    recordHistory(`Deleted row from ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                                  }}
+                                  className="text-slate-300 hover:text-red-500"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {editingDataTable.rows.length === 0 && (
+                        <div className="p-8 text-center text-slate-400 italic">No rows added yet.</div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex-1 flex flex-col justify-center items-center text-slate-400 bg-slate-50 rounded border border-dashed">
+                    <Table size={48} className="mb-4 opacity-20" />
+                    <p>Select a table to edit or create a new one.</p>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
