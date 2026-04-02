@@ -561,6 +561,18 @@ export default function EstimatorApp() {
             newData[itemId].qty = "";
             newData[itemId].measured_qty = "";
             newData[itemId].order_qty = "";
+          } else {
+            if (newData[itemId].qty_mode !== 'manual') {
+              const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+              newData[itemId].measured_qty = evaluateCustomFormula(
+                formula,
+                newData[itemId].qty,
+                newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
+                newData[itemId].order_qty,
+                customVariables,
+                resolveDynamicScope(item)
+              ).toString();
+            }
           }
           changedCount++;
         }
@@ -695,7 +707,7 @@ export default function EstimatorApp() {
         newData[itemId].order_qty = "";
       }
 
-      if (['qty', 'overage_pct', 'order_qty'].includes(field)) {
+      if (['qty', 'overage_pct', 'order_qty'].includes(field) || (field === 'in_scope' && finalValue)) {
         if (newData[itemId].qty_mode !== 'manual') {
           const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
           const item = catalog.find(i => i.item_id === itemId);
@@ -1934,7 +1946,14 @@ export default function EstimatorApp() {
                                                 type="checkbox" 
                                                 className="w-5 h-5 cursor-pointer accent-emerald-600" 
                                                 checked={isChecked} 
-                                                onChange={(e) => updateTakeoffData(item.item_id, 'in_scope', e.target.checked, item.calc_factor_instruction, item.item_name)}
+                                                onChange={(e) => {
+                                                  const newValue = e.target.checked;
+                                                  if (selectedItems.has(item.item_id) && selectedItems.size > 1) {
+                                                    setScopeForSelected(newValue);
+                                                  } else {
+                                                    updateTakeoffData(item.item_id, 'in_scope', newValue, item.calc_factor_instruction, item.item_name);
+                                                  }
+                                                }}
                                               />
                                             </td>
                                             <td className="px-2 py-1 md:py-2 md:pl-4 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
