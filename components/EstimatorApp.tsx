@@ -63,8 +63,12 @@ const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: Dynami
     .filter(dc => {
       if (dc.dataType !== 'number' && dc.dataType !== 'boolean') return false;
       if (!item) return true;
-      if (dc.scope === 'itemgroup' && !item.sub_item_1) return false;
-      if (dc.scope === 'subcategory' && !item.sub_category) return false;
+      
+      // Branch-scoped filtering
+      if (dc.scope === 'category' && dc.category && dc.category !== item.category) return false;
+      if (dc.scope === 'subcategory' && (dc.category !== item.category || dc.subCategory !== item.sub_category)) return false;
+      if (dc.scope === 'itemgroup' && (dc.category !== item.category || dc.subCategory !== item.sub_category || dc.itemGroup !== (item.sub_item_1 || ''))) return false;
+      
       return true;
     })
     .map(dc => ({
@@ -217,6 +221,34 @@ export default function EstimatorApp() {
 
   const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<DynamicColumn | null>(null);
+  const [colScopeL1, setColScopeL1] = useState("");
+  const [colScopeL2, setColScopeL2] = useState("");
+  const [colScopeL3, setColScopeL3] = useState("");
+  const [colScope, setColScope] = useState<'category' | 'subcategory' | 'itemgroup' | 'material' | 'global'>('material');
+
+  useEffect(() => {
+    if (editingColumn) {
+      setColScopeL1(editingColumn.category || "");
+      setColScopeL2(editingColumn.subCategory || "");
+      setColScopeL3(editingColumn.itemGroup || "");
+      setColScope(editingColumn.scope);
+    } else {
+      setColScopeL1("");
+      setColScopeL2("");
+      setColScopeL3("");
+      setColScope("material");
+    }
+  }, [editingColumn]);
+
+  const allCategories = useMemo(() => getUniqueVals(catalog, 'category'), [catalog]);
+  const allSubCategories = useMemo(() => {
+    if (!colScopeL1) return [];
+    return getUniqueVals(catalog.filter(i => i.category === colScopeL1), 'sub_category');
+  }, [catalog, colScopeL1]);
+  const allItemGroups = useMemo(() => {
+    if (!colScopeL1 || !colScopeL2) return [];
+    return getUniqueVals(catalog.filter(i => i.category === colScopeL1 && i.sub_category === colScopeL2), 'sub_item_1');
+  }, [catalog, colScopeL1, colScopeL2]);
 
   const [dataTables, setDataTables] = useState<DataTable[]>([]);
   const [dataTableModalOpen, setDataTableModalOpen] = useState(false);
@@ -283,9 +315,15 @@ export default function EstimatorApp() {
     scope['ItemName'] = item.item_name;
     scope['UOM'] = item.uom;
     
-    // Inject default values from dynamic columns first
+    // Inject default values from relevant dynamic columns first
     cols.forEach(col => {
-      if (col.defaultValue !== undefined && col.defaultValue !== '') {
+      // Branch-scoped filtering
+      let isRelevant = true;
+      if (col.scope === 'category' && col.category && col.category !== item.category) isRelevant = false;
+      if (col.scope === 'subcategory' && (col.category !== item.category || col.subCategory !== item.sub_category)) isRelevant = false;
+      if (col.scope === 'itemgroup' && (col.category !== item.category || col.subCategory !== item.sub_category || col.itemGroup !== (item.sub_item_1 || ''))) isRelevant = false;
+      
+      if (isRelevant && col.defaultValue !== undefined && col.defaultValue !== '') {
         // Convert to number if it's a number type
         const val = col.dataType === 'number' ? Number(col.defaultValue) : 
                     col.dataType === 'boolean' ? (col.defaultValue.toLowerCase() === 'true') : 
@@ -1923,9 +1961,9 @@ export default function EstimatorApp() {
                 {!isCatCollapsed && (
                   <div className="overflow-x-auto pb-4 bg-white">
                     {/* Category Dynamic Fields */}
-                    {dynamicColumns.filter(c => c.scope === 'category').length > 0 && (
+                    {dynamicColumns.filter(c => c.scope === 'category' && (!c.category || c.category === category)).length > 0 && (
                       <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex flex-wrap gap-4">
-                        {dynamicColumns.filter(c => c.scope === 'category').map(col => {
+                        {dynamicColumns.filter(c => c.scope === 'category' && (!c.category || c.category === category)).map(col => {
                           const catKey = `CAT:${category}`;
                           const val = entityData[catKey]?.[col.key] ?? col.defaultValue ?? '';
                           return (
@@ -1990,9 +2028,19 @@ export default function EstimatorApp() {
                         {!isSubCollapsed && (
                           <div>
                             {/* SubCategory Dynamic Fields */}
-                            {dynamicColumns.filter(c => c.scope === 'subcategory').length > 0 && (
+                            {dynamicColumns.filter(c => {
+                              if (c.scope !== 'subcategory') return false;
+                              if (c.category && c.category !== category) return false;
+                              if (c.subCategory && (c.category !== category || c.subCategory !== subCategory)) return false;
+                              return true;
+                            }).length > 0 && (
                               <div className="px-4 py-2 bg-blue-50/30 border-b border-blue-100 flex flex-wrap gap-4">
-                                {dynamicColumns.filter(c => c.scope === 'subcategory').map(col => {
+                                {dynamicColumns.filter(c => {
+                                  if (c.scope !== 'subcategory') return false;
+                                  if (c.category && c.category !== category) return false;
+                                  if (c.subCategory && (c.category !== category || c.subCategory !== subCategory)) return false;
+                                  return true;
+                                }).map(col => {
                                   const subCatKey = `SUBCAT:${category}|${subCategory}`;
                                   const val = entityData[subCatKey]?.[col.key] ?? col.defaultValue ?? '';
                                   return (
@@ -2057,9 +2105,21 @@ export default function EstimatorApp() {
                                 {!isSub1Collapsed && (
                                   <div>
                                     {/* ItemGroup Dynamic Fields */}
-                                    {dynamicColumns.filter(c => c.scope === 'itemgroup').length > 0 && (
+                                    {dynamicColumns.filter(c => {
+                                      if (c.scope !== 'itemgroup') return false;
+                                      if (c.category && c.category !== category) return false;
+                                      if (c.subCategory && (c.category !== category || c.subCategory !== subCategory)) return false;
+                                      if (c.itemGroup && (c.category !== category || c.subCategory !== subCategory || c.itemGroup !== subItem1)) return false;
+                                      return true;
+                                    }).length > 0 && (
                                       <div className="px-4 py-2 bg-emerald-50/30 border-b border-emerald-100 flex flex-wrap gap-4">
-                                        {dynamicColumns.filter(c => c.scope === 'itemgroup').map(col => {
+                                        {dynamicColumns.filter(c => {
+                                          if (c.scope !== 'itemgroup') return false;
+                                          if (c.category && c.category !== category) return false;
+                                          if (c.subCategory && (c.category !== category || c.subCategory !== subCategory)) return false;
+                                          if (c.itemGroup && (c.category !== category || c.subCategory !== subCategory || c.itemGroup !== subItem1)) return false;
+                                          return true;
+                                        }).map(col => {
                                           const itemGroupKey = `ITEMGROUP:${category}|${subCategory}|${subItem1}`;
                                           const val = entityData[itemGroupKey]?.[col.key] ?? col.defaultValue ?? '';
                                           return (
@@ -2097,7 +2157,13 @@ export default function EstimatorApp() {
                                         </th>
                                         <th className="px-3 py-2 text-center min-w-[60px] whitespace-nowrap">SCOPE<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(in/out)</span></th>
                                         <th className="px-3 py-2 min-w-[200px] font-bold whitespace-nowrap">MATERIAL<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(name)</span></th>
-                                        {dynamicColumns.filter(c => c.scope === 'material').map(col => (
+                                        {dynamicColumns.filter(c => {
+                                          if (c.scope !== 'material') return false;
+                                          if (c.category && c.category !== category) return false;
+                                          if (c.subCategory && (c.category !== category || c.subCategory !== subCategory)) return false;
+                                          if (c.itemGroup && (c.category !== category || c.subCategory !== subCategory || c.itemGroup !== subItem1)) return false;
+                                          return true;
+                                        }).map(col => (
                                           <th key={col.id} className="px-3 py-2 min-w-[100px] font-bold whitespace-nowrap uppercase">{col.name}<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">({col.unit || 'custom'})</span></th>
                                         ))}
                                         <th className="px-3 py-2 min-w-[120px] font-bold whitespace-nowrap">SPEC<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(details)</span></th>
@@ -2174,7 +2240,13 @@ export default function EstimatorApp() {
                                                 </div>
                                               </div>
                                             </td>
-                                            {dynamicColumns.filter(c => c.scope === 'material').map(col => {
+                                            {dynamicColumns.filter(c => {
+                                              if (c.scope !== 'material') return false;
+                                              if (c.category && c.category !== category) return false;
+                                              if (c.subCategory && (c.category !== category || c.subCategory !== subCategory)) return false;
+                                              if (c.itemGroup && (c.category !== category || c.subCategory !== subCategory || c.itemGroup !== subItem1)) return false;
+                                              return true;
+                                            }).map(col => {
                                               const matKey = `MATERIAL:${item.item_id}`;
                                               const val = entityData[matKey]?.[col.key] ?? col.defaultValue ?? '';
                                               return (
@@ -2653,7 +2725,10 @@ export default function EstimatorApp() {
                   const name = (form.elements.namedItem('colName') as HTMLInputElement).value.trim();
                   const key = editingColumn ? editingColumn.key : (form.elements.namedItem('colKey') as HTMLInputElement).value.trim();
                   const dataType = (form.elements.namedItem('colType') as HTMLSelectElement).value as 'number' | 'text' | 'boolean';
-                  const scope = (form.elements.namedItem('colScope') as HTMLSelectElement).value as 'category' | 'subcategory' | 'itemgroup' | 'material';
+                  const scope = (form.elements.namedItem('colScope') as HTMLSelectElement).value as 'category' | 'subcategory' | 'itemgroup' | 'material' | 'global';
+                  const category = (form.elements.namedItem('colCat') as HTMLSelectElement)?.value || undefined;
+                  const subCategory = (form.elements.namedItem('colSubCat') as HTMLSelectElement)?.value || undefined;
+                  const itemGroup = (form.elements.namedItem('colItemGroup') as HTMLSelectElement)?.value || undefined;
                   const unit = (form.elements.namedItem('colUnit') as HTMLInputElement).value.trim();
                   const defaultValue = (form.elements.namedItem('colDefault') as HTMLInputElement).value.trim();
                   
@@ -2669,7 +2744,7 @@ export default function EstimatorApp() {
                   
                   let newCols = [...dynamicColumns];
                   if (editingColumn) {
-                    newCols = newCols.map(c => c.id === editingColumn.id ? { ...c, name, key, dataType, scope, unit, defaultValue } : c);
+                    newCols = newCols.map(c => c.id === editingColumn.id ? { ...c, name, key, dataType, scope, unit, defaultValue, category, subCategory, itemGroup } : c);
                   } else {
                     if (newCols.some(c => c.key.toLowerCase() === key.toLowerCase())) {
                       alert("A column with this key already exists.");
@@ -2682,7 +2757,10 @@ export default function EstimatorApp() {
                       dataType,
                       scope,
                       unit,
-                      defaultValue
+                      defaultValue,
+                      category,
+                      subCategory,
+                      itemGroup
                     });
                   }
                   
@@ -2716,14 +2794,70 @@ export default function EstimatorApp() {
                   </div>
                   <div className="flex-1">
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Scope</label>
-                    <select name="colScope" defaultValue={editingColumn?.scope || "material"} className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none">
+                    <select 
+                      name="colScope" 
+                      value={colScope} 
+                      onChange={(e) => setColScope(e.target.value as any)}
+                      className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none"
+                    >
+                      <option value="global">Global (All Items)</option>
                       <option value="category">Category (L1)</option>
                       <option value="subcategory">Sub-Category (L2)</option>
                       <option value="itemgroup">Item Group (L3)</option>
-                      <option value="material">Material</option>
+                      <option value="material">Material (Specific Item)</option>
                     </select>
                   </div>
                 </div>
+
+                {['category', 'subcategory', 'itemgroup'].includes(colScope) && (
+                  <div className="flex flex-col gap-3 p-3 bg-indigo-50/50 rounded border border-indigo-100">
+                    <div className="flex gap-3">
+                      <div className="flex-1">
+                        <label className="block text-[10px] font-bold text-indigo-500 uppercase mb-1">Category (L1)</label>
+                        <select 
+                          name="colCat" 
+                          value={colScopeL1} 
+                          onChange={(e) => setColScopeL1(e.target.value)}
+                          required 
+                          className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none"
+                        >
+                          <option value="">-- Select Category --</option>
+                          {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                      {['subcategory', 'itemgroup'].includes(colScope) && (
+                        <div className="flex-1">
+                          <label className="block text-[10px] font-bold text-indigo-500 uppercase mb-1">Sub-Category (L2)</label>
+                          <select 
+                            name="colSubCat" 
+                            value={colScopeL2} 
+                            onChange={(e) => setColScopeL2(e.target.value)}
+                            required 
+                            className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none"
+                          >
+                            <option value="">-- Select Sub-Category --</option>
+                            {allSubCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                    {colScope === 'itemgroup' && (
+                      <div className="w-full">
+                        <label className="block text-[10px] font-bold text-indigo-500 uppercase mb-1">Item Group (L3)</label>
+                        <select 
+                          name="colItemGroup" 
+                          value={colScopeL3} 
+                          onChange={(e) => setColScopeL3(e.target.value)}
+                          required 
+                          className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none"
+                        >
+                          <option value="">-- Select Item Group --</option>
+                          {allItemGroups.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Unit (Optional)</label>
@@ -2765,7 +2899,16 @@ export default function EstimatorApp() {
                         <tr key={c.id} className="border-b last:border-0 hover:bg-slate-50">
                           <td className="p-2 font-bold">{c.name}</td>
                           <td className="p-2 font-mono text-xs text-indigo-700">{c.key}</td>
-                          <td className="p-2 text-xs uppercase text-slate-500">{c.scope}</td>
+                          <td className="p-2 text-xs uppercase text-slate-500">
+                            {c.scope}
+                            {c.category && (
+                              <div className="text-[9px] text-indigo-400 normal-case mt-0.5">
+                                {c.category} 
+                                {c.subCategory && ` > ${c.subCategory}`} 
+                                {c.itemGroup && ` > ${c.itemGroup}`}
+                              </div>
+                            )}
+                          </td>
                           <td className="p-2 text-right flex justify-end items-center gap-1">
                             <div className="flex flex-col mr-2">
                               <button 
@@ -3450,10 +3593,22 @@ export default function EstimatorApp() {
                         </div>
                       </div>
                       <div className="flex flex-col gap-2">
-                        {dynamicColumns.filter(c => 
-                          c.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
-                          c.key.toLowerCase().includes(formulaHelpSearch.toLowerCase())
-                        ).map(c => (
+                        {dynamicColumns.filter(c => {
+                          const item = catalog.find(i => i.item_id === qtyPanelItemId);
+                          if (!item) return false;
+                          
+                          const matchesSearch = c.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
+                                               c.key.toLowerCase().includes(formulaHelpSearch.toLowerCase());
+                          if (!matchesSearch) return false;
+
+                          if (c.scope === 'global') return true;
+                          if (c.scope === 'category' && c.category && c.category !== item.category) return false;
+                          if (c.scope === 'subcategory' && (c.category !== item.category || c.subCategory !== item.sub_category)) return false;
+                          if (c.scope === 'itemgroup' && (c.category !== item.category || c.subCategory !== item.sub_category || c.itemGroup !== (item.sub_item_1 || ''))) return false;
+                          if (c.scope === 'material' && (c.category !== item.category || c.subCategory !== item.sub_category || c.itemGroup !== (item.sub_item_1 || ''))) return false;
+                          
+                          return true;
+                        }).map(c => (
                           <div key={c.id} className="flex items-start justify-between group bg-blue-50 hover:bg-blue-100 p-2 rounded border border-blue-200 transition">
                             <div className="flex-1 pr-2">
                               <div className="font-mono text-xs font-bold text-blue-700">[{c.key}]</div>

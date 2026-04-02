@@ -38,7 +38,10 @@ export type DynamicColumn = {
   dataType: 'number' | 'text' | 'boolean';
   defaultValue?: any;
   unit?: string;
-  scope: 'category' | 'subcategory' | 'itemgroup' | 'material';
+  scope: 'category' | 'subcategory' | 'itemgroup' | 'material' | 'global';
+  category?: string;
+  subCategory?: string;
+  itemGroup?: string;
 };
 
 export type Client = {
