@@ -40,6 +40,15 @@ export type DynamicColumn = {
   scope: 'category' | 'subcategory' | 'itemgroup' | 'material';
 };
 
+export type Client = {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  notes?: string;
+};
+
 export type HistoryRecord = {
   timestamp: string;
   action: string;

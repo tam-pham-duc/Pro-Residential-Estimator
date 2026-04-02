@@ -3,11 +3,11 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals } from '@/lib/estimator-utils';
-import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn } from '@/lib/types';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
-  Undo2, Redo2, Copy
+  Undo2, Redo2, Copy, Users
 } from 'lucide-react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
@@ -130,6 +130,9 @@ export default function EstimatorApp() {
   const [searchQuery, setSearchQuery] = useState("");
   const [projectName, setProjectName] = useState("");
   const [clientName, setClientName] = useState("");
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientModalOpen, setClientModalOpen] = useState(false);
+  const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [jobNotes, setJobNotes] = useState("");
   const [currentJobId, setCurrentJobId] = useState("");
   const [savedJobs, setSavedJobs] = useState<Record<string, Job>>({});
@@ -294,6 +297,13 @@ export default function EstimatorApp() {
     } else {
        
       setCatalog(defaultCatalog);
+    }
+
+    const savedClients = localStorage.getItem('userClients');
+    if (savedClients) {
+      try {
+        setClients(JSON.parse(savedClients));
+      } catch (e) {}
     }
 
     const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
@@ -1449,6 +1459,9 @@ export default function EstimatorApp() {
             >
               <Redo2 size={16} />
             </button>
+            <button onClick={() => setClientModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+              <Users size={16} /> Clients
+            </button>
             <button onClick={() => setDynamicColumnsModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
               Columns
             </button>
@@ -1486,15 +1499,29 @@ export default function EstimatorApp() {
                 className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
               />
             </div>
-            <div className="flex-1">
-              <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Client</label>
-              <input 
-                type="text" 
+            <div className="flex-1 relative">
+              <div className="flex justify-between items-end mb-1">
+                <label className="block text-xs font-bold text-blue-800 uppercase">Client</label>
+                <button onClick={() => setClientModalOpen(true)} className="text-[10px] font-bold text-blue-600 hover:text-blue-800 uppercase">
+                  Manage Clients
+                </button>
+              </div>
+              <select
                 value={clientName}
-                onChange={(e) => setClientName(e.target.value)}
-                onBlur={() => recordHistory('Updated Client')}
-                className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
-              />
+                onChange={(e) => {
+                  setClientName(e.target.value);
+                  setTimeout(() => recordHistory('Updated Client'), 0);
+                }}
+                className="w-full border border-slate-300 rounded p-2 text-lg font-bold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none appearance-none bg-white"
+              >
+                <option value="">-- Select Client --</option>
+                {clients.map(c => (
+                  <option key={c.id} value={c.name}>{c.name}</option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 pt-5 text-slate-500">
+                <ChevronDown size={16} />
+              </div>
             </div>
             <div className="w-full md:w-48">
               <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Default Overage %</label>
@@ -1969,6 +1996,150 @@ export default function EstimatorApp() {
           })
         )}
       </div>
+
+      {/* Client Management Modal */}
+      {clientModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl p-6 border-t-4 border-blue-500">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Manage Clients</h2>
+              <button onClick={() => { setClientModalOpen(false); setEditingClient(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            
+            <div className="mb-6">
+              <h3 className="text-sm font-bold text-slate-700 mb-2">{editingClient ? 'Edit Client' : 'Add New Client'}</h3>
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const form = e.currentTarget;
+                  const name = (form.elements.namedItem('clientName') as HTMLInputElement).value.trim();
+                  const email = (form.elements.namedItem('clientEmail') as HTMLInputElement).value.trim();
+                  const phone = (form.elements.namedItem('clientPhone') as HTMLInputElement).value.trim();
+                  const address = (form.elements.namedItem('clientAddress') as HTMLInputElement).value.trim();
+                  const notes = (form.elements.namedItem('clientNotes') as HTMLTextAreaElement).value.trim();
+                  
+                  if (!name) {
+                    alert("Client Name is required.");
+                    return;
+                  }
+                  
+                  let newClients = [...clients];
+                  if (editingClient) {
+                    newClients = newClients.map(c => c.id === editingClient.id ? { ...c, name, email, phone, address, notes } : c);
+                    // Update clientName if it was the one being edited
+                    if (clientName === editingClient.name) {
+                      setClientName(name);
+                    }
+                  } else {
+                    if (newClients.some(c => c.name.toLowerCase() === name.toLowerCase())) {
+                      alert("A client with this name already exists.");
+                      return;
+                    }
+                    newClients.push({
+                      id: "CLI-" + Date.now(),
+                      name,
+                      email,
+                      phone,
+                      address,
+                      notes
+                    });
+                  }
+                  
+                  setClients(newClients);
+                  localStorage.setItem('userClients', JSON.stringify(newClients));
+                  
+                  form.reset();
+                  setEditingClient(null);
+                }}
+                className="bg-slate-50 p-4 rounded border border-slate-200 flex flex-col gap-3"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Client Name *</label>
+                    <input name="clientName" type="text" required defaultValue={editingClient?.name || ""} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:border-blue-500 outline-none" placeholder="e.g. Acme Corp" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Email</label>
+                    <input name="clientEmail" type="email" defaultValue={editingClient?.email || ""} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:border-blue-500 outline-none" placeholder="e.g. contact@acme.com" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Phone</label>
+                    <input name="clientPhone" type="text" defaultValue={editingClient?.phone || ""} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:border-blue-500 outline-none" placeholder="e.g. (555) 123-4567" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Address</label>
+                    <input name="clientAddress" type="text" defaultValue={editingClient?.address || ""} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:border-blue-500 outline-none" placeholder="e.g. 123 Main St, City, ST" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Notes</label>
+                  <textarea name="clientNotes" defaultValue={editingClient?.notes || ""} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:border-blue-500 outline-none min-h-[60px]" placeholder="Any additional notes about this client..."></textarea>
+                </div>
+                <div className="flex justify-end gap-2 mt-2">
+                  {editingClient && (
+                    <button type="button" onClick={() => setEditingClient(null)} className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-slate-200 rounded transition">Cancel</button>
+                  )}
+                  <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm font-bold transition">
+                    {editingClient ? 'Save Changes' : 'Add Client'}
+                  </button>
+                </div>
+              </form>
+            </div>
+            
+            <div>
+              <h3 className="text-sm font-bold text-slate-700 mb-2">Existing Clients</h3>
+              <div className="max-h-48 overflow-y-auto border rounded bg-white">
+                {clients.length === 0 ? (
+                  <div className="p-4 text-center text-sm text-slate-400 italic">No clients defined.</div>
+                ) : (
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="p-2 border-b font-bold text-slate-600">Name</th>
+                        <th className="p-2 border-b font-bold text-slate-600">Contact</th>
+                        <th className="p-2 border-b font-bold text-slate-600 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {clients.map(c => (
+                        <tr key={c.id} className="border-b last:border-0 hover:bg-slate-50">
+                          <td className="p-2 font-bold">{c.name}</td>
+                          <td className="p-2 text-xs text-slate-500">
+                            {c.email && <div>{c.email}</div>}
+                            {c.phone && <div>{c.phone}</div>}
+                          </td>
+                          <td className="p-2 text-right">
+                            <button 
+                              onClick={() => setEditingClient(c)}
+                              className="text-blue-600 hover:text-blue-800 text-xs font-bold mr-3"
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`Delete client ${c.name}?`)) {
+                                  const newClients = clients.filter(col => col.id !== c.id);
+                                  setClients(newClients);
+                                  localStorage.setItem('userClients', JSON.stringify(newClients));
+                                  if (editingClient?.id === c.id) setEditingClient(null);
+                                  if (clientName === c.name) setClientName("");
+                                }
+                              }}
+                              className="text-red-600 hover:text-red-800 text-xs font-bold"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dynamic Columns Modal */}
       {dynamicColumnsModalOpen && (
@@ -2698,14 +2869,27 @@ export default function EstimatorApp() {
               </div>
               
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">Client Name</label>
-                <input 
-                  type="text" 
-                  value={newProjectData.client}
-                  onChange={(e) => setNewProjectData({...newProjectData, client: e.target.value})}
-                  className="w-full border border-slate-300 p-2 rounded focus:ring-2 focus:ring-emerald-200 outline-none"
-                  placeholder="e.g. Acme Corp"
-                />
+                <div className="flex justify-between items-end mb-1">
+                  <label className="block text-sm font-bold text-slate-700">Client Name</label>
+                  <button onClick={() => setClientModalOpen(true)} className="text-[10px] font-bold text-emerald-600 hover:text-emerald-800 uppercase">
+                    Manage Clients
+                  </button>
+                </div>
+                <div className="relative">
+                  <select
+                    value={newProjectData.client}
+                    onChange={(e) => setNewProjectData({...newProjectData, client: e.target.value})}
+                    className="w-full border border-slate-300 p-2 rounded focus:ring-2 focus:ring-emerald-200 outline-none appearance-none bg-white"
+                  >
+                    <option value="">-- Select Client --</option>
+                    {clients.map(c => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500">
+                    <ChevronDown size={16} />
+                  </div>
+                </div>
               </div>
 
               <div>
