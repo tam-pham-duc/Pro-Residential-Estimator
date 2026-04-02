@@ -452,6 +452,17 @@ export default function EstimatorApp() {
 
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' | null }>({ key: '', direction: null });
+
+  const handleSort = (key: string) => {
+    let direction: 'asc' | 'desc' | null = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === key && sortConfig.direction === 'desc') {
+      direction = null;
+    }
+    setSortConfig({ key, direction });
+  };
 
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
@@ -2190,7 +2201,18 @@ export default function EstimatorApp() {
                                           />
                                         </th>
                                         <th className="px-3 py-2 text-center min-w-[60px] whitespace-nowrap">SCOPE<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(in/out)</span></th>
-                                        <th className="px-3 py-2 min-w-[200px] font-bold whitespace-nowrap">MATERIAL<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(name)</span></th>
+                                        <th 
+                                          className="px-3 py-2 min-w-[200px] font-bold whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
+                                          onClick={() => handleSort('item_name')}
+                                        >
+                                          <div className="flex items-center gap-1">
+                                            <span>MATERIAL</span>
+                                            {sortConfig.key === 'item_name' && (
+                                              sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(name)</span>
+                                        </th>
                                         {dynamicColumns.filter(c => {
                                           if (c.scope !== 'material') return false;
                                           if (c.category && c.category !== category) return false;
@@ -2198,21 +2220,129 @@ export default function EstimatorApp() {
                                           if (c.itemGroup && (c.category !== category || c.subCategory !== subCategory || c.itemGroup !== subItem1)) return false;
                                           return true;
                                         }).map(col => (
-                                          <th key={col.id} className="px-3 py-2 min-w-[100px] font-bold whitespace-nowrap uppercase">{col.name}<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">({col.unit || 'custom'})</span></th>
+                                          <th 
+                                            key={col.id} 
+                                            className="px-3 py-2 min-w-[100px] font-bold whitespace-nowrap uppercase cursor-pointer hover:bg-slate-200 transition-colors"
+                                            onClick={() => handleSort(col.key)}
+                                          >
+                                            <div className="flex items-center gap-1">
+                                              <span>{col.name}</span>
+                                              {sortConfig.key === col.key && (
+                                                sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                              )}
+                                            </div>
+                                            <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">({col.unit || 'custom'})</span>
+                                          </th>
                                         ))}
-                                        <th className="px-3 py-2 min-w-[120px] font-bold whitespace-nowrap">SPEC<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(details)</span></th>
-                                        <th className="px-3 py-2 min-w-[100px] font-bold text-emerald-700 whitespace-nowrap">TAKE-OFF<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(measured)</span></th>
-                                        <th className="px-3 py-2 min-w-[100px] text-center font-bold whitespace-nowrap">OVERAGE %<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(waste factor)</span></th>
-                                        <th className="px-3 py-2 min-w-[100px] text-center font-bold text-emerald-700 whitespace-nowrap">ORDER<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(pkg/divisor)</span></th>
-                                        <th className="px-3 py-2 min-w-[100px] text-center font-bold text-blue-700 whitespace-nowrap">QTY<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(final to buy)</span></th>
-                                        <th className="px-3 py-2 text-center min-w-[90px] whitespace-nowrap">UOM<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(unit)</span></th>
+                                        <th 
+                                          className="px-3 py-2 min-w-[120px] font-bold whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
+                                          onClick={() => handleSort('spec')}
+                                        >
+                                          <div className="flex items-center gap-1">
+                                            <span>SPEC</span>
+                                            {sortConfig.key === 'spec' && (
+                                              sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(details)</span>
+                                        </th>
+                                        <th 
+                                          className="px-3 py-2 min-w-[100px] font-bold text-emerald-700 whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
+                                          onClick={() => handleSort('measured_qty')}
+                                        >
+                                          <div className="flex items-center gap-1">
+                                            <span>TAKE-OFF</span>
+                                            {sortConfig.key === 'measured_qty' && (
+                                              sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(measured)</span>
+                                        </th>
+                                        <th 
+                                          className="px-3 py-2 min-w-[100px] text-center font-bold whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
+                                          onClick={() => handleSort('overage_pct')}
+                                        >
+                                          <div className="flex items-center justify-center gap-1">
+                                            <span>OVERAGE %</span>
+                                            {sortConfig.key === 'overage_pct' && (
+                                              sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(waste factor)</span>
+                                        </th>
+                                        <th 
+                                          className="px-3 py-2 min-w-[100px] text-center font-bold text-emerald-700 whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
+                                          onClick={() => handleSort('order_qty')}
+                                        >
+                                          <div className="flex items-center justify-center gap-1">
+                                            <span>ORDER</span>
+                                            {sortConfig.key === 'order_qty' && (
+                                              sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(pkg/divisor)</span>
+                                        </th>
+                                        <th 
+                                          className="px-3 py-2 min-w-[100px] text-center font-bold text-blue-700 whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
+                                          onClick={() => handleSort('qty')}
+                                        >
+                                          <div className="flex items-center justify-center gap-1">
+                                            <span>QTY</span>
+                                            {sortConfig.key === 'qty' && (
+                                              sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(final to buy)</span>
+                                        </th>
+                                        <th 
+                                          className="px-3 py-2 text-center min-w-[90px] whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
+                                          onClick={() => handleSort('uom')}
+                                        >
+                                          <div className="flex items-center justify-center gap-1">
+                                            <span>UOM</span>
+                                            {sortConfig.key === 'uom' && (
+                                              sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(unit)</span>
+                                        </th>
                                         <th className="px-3 py-2 min-w-[150px] font-bold whitespace-nowrap">REFERENCE<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(page/detail)</span></th>
                                         <th className="px-3 py-2 min-w-[150px] font-bold whitespace-nowrap">RULE / NOTE<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(logic)</span></th>
                                       </tr>
                                     </thead>
                                     <tbody className="block md:table-row-group">
-                                      {items.map(item => {
-                                        const rowData = takeoffData[item.item_id] || { in_scope: false, spec: "", qty: "", measured_qty: "", overage_pct: "", order_qty: "", evidence: "", qty_mode: "auto" };
+                                      {(() => {
+                                        let sortedItems = [...items];
+                                        if (sortConfig.key && sortConfig.direction) {
+                                          sortedItems.sort((a, b) => {
+                                            let valA: any = '';
+                                            let valB: any = '';
+
+                                            if (['item_name', 'uom'].includes(sortConfig.key)) {
+                                              valA = a[sortConfig.key as keyof Item] || '';
+                                              valB = b[sortConfig.key as keyof Item] || '';
+                                            } else if (['spec', 'measured_qty', 'overage_pct', 'order_qty', 'qty'].includes(sortConfig.key)) {
+                                              valA = takeoffData[a.item_id]?.[sortConfig.key as keyof TakeoffItem] || '';
+                                              valB = takeoffData[b.item_id]?.[sortConfig.key as keyof TakeoffItem] || '';
+                                            } else {
+                                              // Dynamic column
+                                              const matKeyA = `MATERIAL:${a.item_id}`;
+                                              const matKeyB = `MATERIAL:${b.item_id}`;
+                                              const col = dynamicColumns.find(c => c.key === sortConfig.key);
+                                              valA = entityData[matKeyA]?.[sortConfig.key] ?? col?.defaultValue ?? '';
+                                              valB = entityData[matKeyB]?.[sortConfig.key] ?? col?.defaultValue ?? '';
+                                            }
+
+                                            if (typeof valA === 'string') valA = valA.toLowerCase();
+                                            if (typeof valB === 'string') valB = valB.toLowerCase();
+
+                                            if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+                                            if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+                                            return 0;
+                                          });
+                                        }
+                                        return sortedItems.map(item => {
+                                          const rowData = takeoffData[item.item_id] || { in_scope: false, spec: "", qty: "", measured_qty: "", overage_pct: "", order_qty: "", evidence: "", qty_mode: "auto" };
                                         const isChecked = rowData.in_scope;
                                         const isDisabled = !isChecked;
                                         const rowBg = isChecked ? "bg-emerald-50/40" : "hover:bg-slate-50";
@@ -2421,8 +2551,9 @@ export default function EstimatorApp() {
                                             </td>
                                           </tr>
                                         );
-                                      })}
-                                    </tbody>
+                                      })
+                                    })()}
+                                  </tbody>
                                   </table>
                                   </div>
                                 )}
