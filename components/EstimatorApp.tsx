@@ -1763,6 +1763,75 @@ export default function EstimatorApp() {
     event.target.value = "";
   };
 
+  const exportCustomVariables = () => {
+    const data = {
+      type: 'customVariables',
+      exportDate: new Date().toISOString(),
+      customVariables: customVariables
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `custom_variables_${projectName.replace(/\s+/g, '_') || 'export'}_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const importCustomVariables = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const importedData = JSON.parse(e.target?.result as string);
+        if (importedData.type === 'customVariables' && Array.isArray(importedData.customVariables)) {
+          const newVars = importedData.customVariables;
+          
+          // Validate structure
+          const isValid = newVars.every((v: any) => v.name && (v.formula !== undefined || v.value !== undefined));
+          if (!isValid) {
+            alert("Invalid custom variables format.");
+            return;
+          }
+
+          if (window.confirm(`Import ${newVars.length} custom variables? This will merge them with existing variables.`)) {
+            let updatedVars = [...customVariables];
+            newVars.forEach((nv: any) => {
+              const index = updatedVars.findIndex(v => v.name.toLowerCase() === nv.name.toLowerCase());
+              if (index !== -1) {
+                updatedVars[index] = { ...updatedVars[index], ...nv };
+              } else {
+                updatedVars.push({
+                  id: nv.id || "CV-" + Date.now() + Math.random(),
+                  ...nv
+                });
+              }
+            });
+
+            // Recalculate affected variables and items
+            const { newData, hasChanges, newVars: finalVars } = recalculateAffectedItems([], updatedVars, entityData, takeoffData);
+            
+            setCustomVariables(finalVars);
+            recordHistory(`Imported custom variables from JSON`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, finalVars, jobNotes, dynamicColumns, entityData);
+            alert("Custom variables imported successfully!");
+          }
+        } else {
+          alert("Invalid JSON file. Please select a custom variables export file.");
+        }
+      } catch (err) {
+        console.error("Import error:", err);
+        alert("Error parsing JSON file.");
+      }
+    };
+    reader.readAsText(file);
+    // Reset input
+    event.target.value = '';
+  };
+
   const openQtyPanel = (itemId: string) => {
     const data = takeoffData[itemId] || {};
     const formula = data.custom_formula || DEFAULT_QTY_FORMULA;
@@ -3809,7 +3878,20 @@ export default function EstimatorApp() {
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-md p-6 border-t-4 border-amber-500">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold">Manage Custom Variables</h2>
-              <button onClick={() => { setCustomVarModalOpen(false); setEditingCustomVar(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={exportCustomVariables}
+                  title="Export Variables to JSON"
+                  className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded transition"
+                >
+                  <FileJson size={18} />
+                </button>
+                <label className="p-1.5 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded transition cursor-pointer" title="Import Variables from JSON">
+                  <Upload size={18} />
+                  <input type="file" className="hidden" accept=".json" onChange={importCustomVariables} />
+                </label>
+                <button onClick={() => { setCustomVarModalOpen(false); setEditingCustomVar(null); }} className="text-slate-400 hover:text-slate-600 ml-2"><X size={24} /></button>
+              </div>
             </div>
             
             <div className="mb-6">
