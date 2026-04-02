@@ -277,14 +277,14 @@ export default function EstimatorApp() {
   };
 
   const variableRegistry = useMemo(() => {
-    const registry: Record<string, { key: string, scope: string, type: string }> = {};
+    const registry: Record<string, { key: string, scope: string, type: string, col?: DynamicColumn }> = {};
     
     customVariables.forEach(cv => {
       registry[cv.name] = { key: cv.name, scope: 'global', type: 'number' };
     });
     
     dynamicColumns.forEach(dc => {
-      registry[dc.key] = { key: dc.key, scope: dc.scope, type: dc.dataType };
+      registry[dc.key] = { key: dc.key, scope: dc.scope, type: dc.dataType, col: dc };
     });
     
     return registry;
@@ -3037,6 +3037,40 @@ export default function EstimatorApp() {
             <div className="space-y-4 max-h-80 overflow-y-auto pr-2">
               {templateToApply.variables.map(v => {
                 const isMapped = !!variableMappings[v];
+                const item = catalog.find(i => i.item_id === qtyPanelItemId);
+                
+                // Categorize variables for suggestions
+                const builtInVars = [
+                  { key: 'Take-off', label: 'Take-off (Primary measurement)' },
+                  { key: 'Overage %', label: 'Overage % (Waste factor)' },
+                  { key: 'Order', label: 'Order (Packaging/Unit size)' }
+                ];
+
+                const relevantVars: string[] = [];
+                const otherVars: string[] = [];
+
+                Object.entries(variableRegistry).forEach(([regKey, info]) => {
+                  let isRelevant = false;
+                  if (info.scope === 'global') {
+                    isRelevant = true;
+                  } else if (item && info.col) {
+                    const c = info.col;
+                    if (c.scope === 'category' && c.category === item.category) isRelevant = true;
+                    if (c.scope === 'subcategory' && c.category === item.category && c.subCategory === item.sub_category) isRelevant = true;
+                    if (c.scope === 'itemgroup' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '')) isRelevant = true;
+                    if (c.scope === 'material' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '') && c.materialName === item.item_name) isRelevant = true;
+                  }
+
+                  if (isRelevant) {
+                    relevantVars.push(regKey);
+                  } else {
+                    otherVars.push(regKey);
+                  }
+                });
+
+                // Check for "Best Match" (name match)
+                const bestMatch = [...relevantVars, ...otherVars].find(k => k.toLowerCase() === v.toLowerCase());
+
                 return (
                   <div key={v} className={`p-3 rounded border transition ${isMapped ? 'border-slate-200 bg-white' : 'border-amber-300 bg-amber-50'}`}>
                     <div className="flex justify-between items-center mb-1">
@@ -3045,25 +3079,50 @@ export default function EstimatorApp() {
                       </label>
                       {!isMapped && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">Required</span>}
                     </div>
+                    
+                    {bestMatch && !isMapped && (
+                      <div className="text-[10px] text-emerald-600 font-bold mb-1 flex items-center gap-1">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+                        Suggested Match: [{bestMatch}]
+                      </div>
+                    )}
+
                     <select 
                       value={variableMappings[v] || ""}
                       onChange={(e) => setVariableMappings(prev => ({ ...prev, [v]: e.target.value }))}
                       className={`w-full border p-2 rounded text-sm outline-none focus:ring-2 transition ${isMapped ? 'border-slate-300 focus:ring-indigo-200' : 'border-amber-400 focus:ring-amber-200'}`}
                     >
                       <option value="">-- Select Project Variable --</option>
+                      
                       <optgroup label="Built-in Variables">
-                        <option value="[Take-off]">Take-off (Primary measurement)</option>
-                        <option value="[Overage %]">Overage % (Waste factor)</option>
-                        <option value="[Order]">Order (Packaging/Unit size)</option>
+                        {builtInVars.map(bv => (
+                          <option key={bv.key} value={`[${bv.key}]`}>{bv.label}</option>
+                        ))}
                       </optgroup>
                       
-                      {Object.keys(variableRegistry).length > 0 && (
-                        <optgroup label="Project Variables (Custom & Dynamic)">
-                          {Object.entries(variableRegistry).map(([regKey, info]) => (
-                            <option key={regKey} value={`[${regKey}]`}>
-                              {regKey} ({info.scope === 'global' ? 'Global' : 'Dynamic'})
-                            </option>
-                          ))}
+                      {relevantVars.length > 0 && (
+                        <optgroup label="Relevant to this Item">
+                          {relevantVars.map(regKey => {
+                            const info = variableRegistry[regKey];
+                            return (
+                              <option key={regKey} value={`[${regKey}]`}>
+                                {regKey} ({info.scope === 'global' ? 'Global' : 'Scoped'})
+                              </option>
+                            );
+                          })}
+                        </optgroup>
+                      )}
+
+                      {otherVars.length > 0 && (
+                        <optgroup label="Other Project Variables">
+                          {otherVars.map(regKey => {
+                            const info = variableRegistry[regKey];
+                            return (
+                              <option key={regKey} value={`[${regKey}]`}>
+                                {regKey} ({info.scope})
+                              </option>
+                            );
+                          })}
                         </optgroup>
                       )}
                     </select>
@@ -3084,6 +3143,18 @@ export default function EstimatorApp() {
                   const unmapped = templateToApply.variables.filter(v => !variableMappings[v]);
                   if (unmapped.length > 0) {
                     if (!window.confirm(`You haven't mapped: ${unmapped.join(', ')}. These will remain as placeholders in the formula. Continue?`)) {
+                      return;
+                    }
+                  }
+
+                  // Confirmation for shared variables
+                  const mappedKeys = Object.values(variableMappings)
+                    .map(v => v.replace(/^\[|\]$/g, ''))
+                    .filter(k => k !== 'Take-off' && k !== 'Overage %' && k !== 'Order');
+                  
+                  const sharedVars = mappedKeys.filter(k => isVariableUsedInFormulas(k));
+                  if (sharedVars.length > 0) {
+                    if (!window.confirm(`The following mapped variables are already used in other formulas: ${sharedVars.join(', ')}. Applying this template will link this item to these shared variables. Continue?`)) {
                       return;
                     }
                   }
@@ -3572,18 +3643,54 @@ export default function EstimatorApp() {
                             if (template) {
                               if (template.variables.length > 0) {
                                 setTemplateToApply(template);
-                                // Auto-map variables if they exist in registry
+                                // Auto-map variables if they exist in registry (case-insensitive and scope-aware)
                                 const initialMappings: Record<string, string> = {};
+                                const item = catalog.find(i => i.item_id === qtyPanelItemId);
+                                
                                 template.variables.forEach(v => {
-                                  if (variableRegistry[v]) {
-                                    initialMappings[v] = `[${v}]`;
-                                  } else if (v === 'Take-off' || v === 'Takeoff') {
+                                  // 1. Check for built-in variables first
+                                  const vLower = v.toLowerCase();
+                                  if (vLower === 'take-off' || vLower === 'takeoff') {
                                     initialMappings[v] = '[Take-off]';
-                                  } else if (v === 'Overage %' || v === 'Overage') {
-                                    initialMappings[v] = '[Overage %]';
-                                  } else if (v === 'Order') {
-                                    initialMappings[v] = '[Order]';
+                                    return;
                                   }
+                                  if (vLower === 'overage %' || vLower === 'overage') {
+                                    initialMappings[v] = '[Overage %]';
+                                    return;
+                                  }
+                                  if (vLower === 'order') {
+                                    initialMappings[v] = '[Order]';
+                                    return;
+                                  }
+
+                                  // 2. Find all potential matches in registry
+                                  const matches = Object.entries(variableRegistry).filter(([regKey]) => 
+                                    regKey.toLowerCase() === vLower
+                                  );
+
+                                  if (matches.length === 0) return;
+
+                                  // 3. If we have matches, prioritize by scope relevance to current item
+                                  if (item) {
+                                    const relevantMatch = matches.find(([_, info]) => {
+                                      if (info.scope === 'global') return true;
+                                      if (!info.col) return false;
+                                      const c = info.col;
+                                      if (c.scope === 'category' && c.category === item.category) return true;
+                                      if (c.scope === 'subcategory' && c.category === item.category && c.subCategory === item.sub_category) return true;
+                                      if (c.scope === 'itemgroup' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '')) return true;
+                                      if (c.scope === 'material' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '') && c.materialName === item.item_name) return true;
+                                      return false;
+                                    });
+
+                                    if (relevantMatch) {
+                                      initialMappings[v] = `[${relevantMatch[0]}]`;
+                                      return;
+                                    }
+                                  }
+
+                                  // 4. Fallback to first case-insensitive match if no scope-relevant match found
+                                  initialMappings[v] = `[${matches[0][0]}]`;
                                 });
                                 setVariableMappings(initialMappings);
                                 setMappingModalOpen(true);
