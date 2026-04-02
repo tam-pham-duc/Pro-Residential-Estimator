@@ -271,3 +271,21 @@ export function validateCustomFormula(
 export function getUniqueVals(array: any[], key: string) { 
     return Array.from(new Set(array.map(item => item[key] || "General"))).sort(); 
 }
+
+export function extractVariablesFromFormula(formulaStr: string): string[] {
+    const variables: string[] = [];
+    if (!formulaStr) return variables;
+    
+    // Extract variables in brackets [VarName]
+    const regex = /\[(.*?)\]/g;
+    let match;
+    while ((match = regex.exec(formulaStr)) !== null) {
+        const varName = match[1];
+        // Skip built-in variables if needed, or include them?
+        // The prompt says "auto extract: formula, variables"
+        if (!variables.includes(varName)) {
+            variables.push(varName);
+        }
+    }
+    return variables;
+}

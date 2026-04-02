@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
-import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables } from '@/lib/estimator-utils';
-import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaPreset } from '@/lib/types';
+import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables, extractVariablesFromFormula } from '@/lib/estimator-utils';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, 
   ChevronDown, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
@@ -201,9 +201,15 @@ export default function EstimatorApp() {
   const [customVariables, setCustomVariables] = useState<CustomVariable[]>([]);
   const [dynamicColumns, setDynamicColumns] = useState<DynamicColumn[]>([]);
   const [entityData, setEntityData] = useState<Record<string, Record<string, any>>>({});
-  const [formulaPresets, setFormulaPresets] = useState<FormulaPreset[]>([]);
-  const [formulaPresetModalOpen, setFormulaPresetModalOpen] = useState(false);
-  const [editingFormulaPreset, setEditingFormulaPreset] = useState<FormulaPreset | null>(null);
+  const [formulaTemplates, setFormulaTemplates] = useState<FormulaTemplate[]>([]);
+  const [formulaTemplateModalOpen, setFormulaTemplateModalOpen] = useState(false);
+  const [editingFormulaTemplate, setEditingFormulaTemplate] = useState<FormulaTemplate | null>(null);
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [templateScopeFilter, setTemplateScopeFilter] = useState<string>("all");
+  
+  const [mappingModalOpen, setMappingModalOpen] = useState(false);
+  const [templateToApply, setTemplateToApply] = useState<FormulaTemplate | null>(null);
+  const [variableMappings, setVariableMappings] = useState<Record<string, string>>({});
   const [customVarModalOpen, setCustomVarModalOpen] = useState(false);
   const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
@@ -230,8 +236,8 @@ export default function EstimatorApp() {
     for (const cv of customVariables) {
       if (cv.formula && cv.formula.includes(keyPattern)) return true;
     }
-    for (const fp of formulaPresets) {
-      if (fp.formula.includes(keyPattern)) return true;
+    for (const ft of formulaTemplates) {
+      if (ft.formula.includes(keyPattern)) return true;
     }
     for (const itemId in takeoffData) {
       const item = takeoffData[itemId];
@@ -241,7 +247,7 @@ export default function EstimatorApp() {
       if (item.calc_factor_instruction && item.calc_factor_instruction.includes(keyPattern)) return true;
     }
     return false;
-  }, [customVariables, formulaPresets, takeoffData, catalog]);
+  }, [customVariables, formulaTemplates, takeoffData, catalog]);
 
   const formulaCompletions = useMemo(() => {
     const item = catalog.find(i => i.item_id === qtyPanelItemId);
@@ -416,19 +422,34 @@ export default function EstimatorApp() {
       } catch (e) {}
     }
 
-    const savedPresets = localStorage.getItem('formulaPresets');
-    if (savedPresets) {
+    const savedFormulaTemplates = localStorage.getItem('formulaTemplates');
+    if (savedFormulaTemplates) {
       try {
-        setFormulaPresets(JSON.parse(savedPresets));
+        setFormulaTemplates(JSON.parse(savedFormulaTemplates));
       } catch (e) {}
+    } else {
+      // Migration from old presets
+      const savedPresets = localStorage.getItem('formulaPresets');
+      if (savedPresets) {
+        try {
+          const presets = JSON.parse(savedPresets);
+          const templates = presets.map((p: any) => ({
+            ...p,
+            variables: extractVariablesFromFormula(p.formula),
+            createdAt: new Date().toISOString()
+          }));
+          setFormulaTemplates(templates);
+          localStorage.setItem('formulaTemplates', JSON.stringify(templates));
+        } catch (e) {}
+      }
     }
 
     const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
     setSavedJobs(jobs);
     
-    const savedTemplates = localStorage.getItem('projectTemplates');
-    if (savedTemplates) {
-      setTemplates(JSON.parse(savedTemplates));
+    const savedProjectTemplates = localStorage.getItem('projectTemplates');
+    if (savedProjectTemplates) {
+      setTemplates(JSON.parse(savedProjectTemplates));
     }
 
     const savedDefaultOverage = localStorage.getItem('defaultOveragePct');
@@ -441,7 +462,7 @@ export default function EstimatorApp() {
     setIsMounted(true);
   }, []);
 
-  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaPresets = formulaPresets) => {
+  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaTemplates = formulaTemplates) => {
     const snapshot: HistoryRecord = {
       timestamp: new Date().toISOString(),
       action: actionDescription,
@@ -453,7 +474,7 @@ export default function EstimatorApp() {
       customVariables: JSON.parse(JSON.stringify(newCustomVars)),
       dynamicColumns: JSON.parse(JSON.stringify(newDynamicColumns)),
       entityData: JSON.parse(JSON.stringify(newEntityData)),
-      formulaPresets: JSON.parse(JSON.stringify(newFormulaPresets))
+      formulaTemplates: JSON.parse(JSON.stringify(newFormulaTemplates))
     };
     
     // Prevent duplicate history records using refs to ensure we have the latest state
@@ -504,7 +525,7 @@ export default function EstimatorApp() {
       if (record.customVariables) setCustomVariables(record.customVariables);
       if (record.dynamicColumns) setDynamicColumns(record.dynamicColumns);
       if (record.entityData) setEntityData(record.entityData);
-      if (record.formulaPresets) setFormulaPresets(record.formulaPresets);
+      if (record.formulaTemplates) setFormulaTemplates(record.formulaTemplates);
       setHistoryIndex(newIndex);
     }
   }, [canUndo, historyIndex, actionHistory]);
@@ -524,7 +545,7 @@ export default function EstimatorApp() {
       if (record.customVariables) setCustomVariables(record.customVariables);
       if (record.dynamicColumns) setDynamicColumns(record.dynamicColumns);
       if (record.entityData) setEntityData(record.entityData);
-      if (record.formulaPresets) setFormulaPresets(record.formulaPresets);
+      if (record.formulaTemplates) setFormulaTemplates(record.formulaTemplates);
       setHistoryIndex(newIndex);
     }
   }, [canRedo, historyIndex, actionHistory]);
@@ -1076,7 +1097,7 @@ export default function EstimatorApp() {
       customVariables,
       dynamicColumns,
       entityData,
-      formulaPresets
+      formulaTemplates
     };
     const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
     setSavedJobs(newSavedJobs);
@@ -1104,7 +1125,7 @@ export default function EstimatorApp() {
       customVariables: customVariables,
       dynamicColumns: dynamicColumns,
       entityData: entityData,
-      formulaPresets: formulaPresets,
+      formulaTemplates: formulaTemplates,
       defaultOveragePct: defaultOveragePct,
       jobNotes: jobNotes,
       createdAt: new Date().toISOString()
@@ -1130,7 +1151,7 @@ export default function EstimatorApp() {
         setCustomVariables(tpl.customVariables);
         setDynamicColumns(tpl.dynamicColumns || []);
         setEntityData(tpl.entityData || {});
-        setFormulaPresets(tpl.formulaPresets || []);
+        setFormulaTemplates(tpl.formulaTemplates || []);
         if (tpl.defaultOveragePct !== undefined) {
           setDefaultOveragePct(tpl.defaultOveragePct);
           localStorage.setItem('defaultOveragePct', tpl.defaultOveragePct);
@@ -1188,8 +1209,8 @@ export default function EstimatorApp() {
       setCustomVariables(jobData.customVariables || []);
       setDynamicColumns(jobData.dynamicColumns || []);
       setEntityData(jobData.entityData || {});
-      setFormulaPresets(jobData.formulaPresets || []);
-      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || [], jobData.jobNotes || "", jobData.dynamicColumns || [], jobData.entityData || {}, jobData.formulaPresets || []), 0);
+      setFormulaTemplates(jobData.formulaTemplates || []);
+      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || [], jobData.jobNotes || "", jobData.dynamicColumns || [], jobData.entityData || {}, jobData.formulaTemplates || []), 0);
     }
   };
 
@@ -2450,7 +2471,7 @@ export default function EstimatorApp() {
                                   if (job.customVariables) setCustomVariables(job.customVariables);
                                   if (job.dynamicColumns) setDynamicColumns(job.dynamicColumns);
                                   if (job.entityData) setEntityData(job.entityData);
-                                  if (job.formulaPresets) setFormulaPresets(job.formulaPresets);
+                                  if (job.formulaTemplates) setFormulaTemplates(job.formulaTemplates);
                                   setProjectModalOpen(false);
                                 }}
                                 className="text-emerald-600 hover:text-emerald-800 text-xs font-bold px-2 py-1 bg-emerald-50 rounded"
@@ -2663,25 +2684,80 @@ export default function EstimatorApp() {
         </div>
       )}
 
-      {/* Formula Preset Modal */}
-      {formulaPresetModalOpen && (
+      {/* Mapping Modal */}
+      {mappingModalOpen && templateToApply && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[70]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-md p-6 border-t-4 border-indigo-500">
+            <h2 className="text-xl font-bold mb-4">Map Template Variables</h2>
+            <p className="text-sm text-slate-600 mb-4">
+              Template: <span className="font-bold text-indigo-600">{templateToApply.name}</span>
+            </p>
+            <div className="space-y-4 max-h-60 overflow-y-auto pr-2">
+              {templateToApply.variables.map(v => (
+                <div key={v}>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">{v}</label>
+                  <select 
+                    value={variableMappings[v] || ""}
+                    onChange={(e) => setVariableMappings(prev => ({ ...prev, [v]: e.target.value }))}
+                    className="w-full border p-2 rounded text-sm outline-none focus:ring-2 focus:ring-indigo-200"
+                  >
+                    <option value="">-- Select Variable --</option>
+                    {Object.keys(variableRegistry).map(regKey => (
+                      <option key={regKey} value={`[${regKey}]`}>{regKey}</option>
+                    ))}
+                    <option value="[Take-off]">Take-off</option>
+                    <option value="[Overage %]">Overage %</option>
+                    <option value="[Order]">Order</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button 
+                onClick={() => setMappingModalOpen(false)}
+                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded transition"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  let finalFormula = templateToApply.formula;
+                  Object.entries(variableMappings).forEach(([tplVar, mappedVar]) => {
+                    if (mappedVar) {
+                      finalFormula = finalFormula.split(`[${tplVar}]`).join(mappedVar);
+                    }
+                  });
+                  setCustomFormula(finalFormula);
+                  setMappingModalOpen(false);
+                }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded transition"
+              >
+                Apply Formula
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Formula Template Modal */}
+      {formulaTemplateModalOpen && (
         <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
-          <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl p-6 border-t-4 border-indigo-500 max-h-[90vh] flex flex-col">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-3xl p-6 border-t-4 border-indigo-500 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold">Manage Formula Presets</h2>
-              <button onClick={() => { setFormulaPresetModalOpen(false); setEditingFormulaPreset(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+              <h2 className="text-xl font-bold">Formula Library</h2>
+              <button onClick={() => { setFormulaTemplateModalOpen(false); setEditingFormulaTemplate(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
             </div>
             
             <div className="mb-6 shrink-0">
-              <h3 className="text-sm font-bold text-slate-700 mb-2">{editingFormulaPreset ? 'Edit Preset' : 'Add New Preset'}</h3>
+              <h3 className="text-sm font-bold text-slate-700 mb-2">{editingFormulaTemplate ? 'Edit Template' : 'Add New Template'}</h3>
               <div className="space-y-3 bg-slate-50 p-3 rounded border border-slate-200">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">Preset Name</label>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Template Name</label>
                     <input 
                       type="text" 
-                      id="fp-name"
-                      defaultValue={editingFormulaPreset?.name || ''}
+                      id="ft-name"
+                      defaultValue={editingFormulaTemplate?.name || ''}
                       placeholder="e.g. Standard Drywall Calc"
                       className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
                     />
@@ -2689,8 +2765,8 @@ export default function EstimatorApp() {
                   <div>
                     <label className="block text-xs font-bold text-slate-600 mb-1">Scope</label>
                     <select 
-                      id="fp-scope"
-                      defaultValue={editingFormulaPreset?.scope || 'global'}
+                      id="ft-scope"
+                      defaultValue={editingFormulaTemplate?.scope || 'global'}
                       className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
                     >
                       <option value="global">Global (All Items)</option>
@@ -2705,8 +2781,8 @@ export default function EstimatorApp() {
                   <label className="block text-xs font-bold text-slate-600 mb-1">Formula</label>
                   <input 
                     type="text" 
-                    id="fp-formula"
-                    defaultValue={editingFormulaPreset?.formula || ''}
+                    id="ft-formula"
+                    defaultValue={editingFormulaTemplate?.formula || ''}
                     placeholder="e.g. [Take-off] * 1.15 / [Order]"
                     className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none font-mono"
                   />
@@ -2715,16 +2791,16 @@ export default function EstimatorApp() {
                   <label className="block text-xs font-bold text-slate-600 mb-1">Description (optional)</label>
                   <input 
                     type="text" 
-                    id="fp-desc"
-                    defaultValue={editingFormulaPreset?.description || ''}
+                    id="ft-desc"
+                    defaultValue={editingFormulaTemplate?.description || ''}
                     placeholder="e.g. Calculates drywall sheets with 15% waste"
                     className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
                   />
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
-                  {editingFormulaPreset && (
+                  {editingFormulaTemplate && (
                     <button 
-                      onClick={() => setEditingFormulaPreset(null)}
+                      onClick={() => setEditingFormulaTemplate(null)}
                       className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded transition"
                     >
                       Cancel Edit
@@ -2732,10 +2808,10 @@ export default function EstimatorApp() {
                   )}
                   <button 
                     onClick={() => {
-                      const nameInput = document.getElementById('fp-name') as HTMLInputElement;
-                      const formulaInput = document.getElementById('fp-formula') as HTMLInputElement;
-                      const descInput = document.getElementById('fp-desc') as HTMLInputElement;
-                      const scopeInput = document.getElementById('fp-scope') as HTMLSelectElement;
+                      const nameInput = document.getElementById('ft-name') as HTMLInputElement;
+                      const formulaInput = document.getElementById('ft-formula') as HTMLInputElement;
+                      const descInput = document.getElementById('ft-desc') as HTMLInputElement;
+                      const scopeInput = document.getElementById('ft-scope') as HTMLSelectElement;
                       
                       const name = nameInput.value.trim();
                       const formula = formulaInput.value.trim();
@@ -2743,7 +2819,7 @@ export default function EstimatorApp() {
                       const scope = scopeInput.value as any;
                       
                       if (!name) {
-                        alert("Please enter a preset name.");
+                        alert("Please enter a template name.");
                         return;
                       }
                       if (!formula) {
@@ -2751,72 +2827,119 @@ export default function EstimatorApp() {
                         return;
                       }
                       
-                      let newPresets = [...formulaPresets];
-                      if (editingFormulaPreset) {
-                        newPresets = newPresets.map(p => p.id === editingFormulaPreset.id ? { ...p, name, formula, description: desc, scope } : p);
+                      const variables = extractVariablesFromFormula(formula);
+                      
+                      let newTemplates = [...formulaTemplates];
+                      if (editingFormulaTemplate) {
+                        newTemplates = newTemplates.map(t => t.id === editingFormulaTemplate.id ? { ...t, name, formula, description: desc, scope, variables } : t);
                       } else {
-                        newPresets.push({
-                          id: "FP-" + Date.now(),
+                        newTemplates.push({
+                          id: "FT-" + Date.now(),
                           name,
                           formula,
                           description: desc,
-                          scope
+                          scope,
+                          variables,
+                          createdAt: new Date().toISOString()
                         });
                       }
                       
-                      setFormulaPresets(newPresets);
-                      localStorage.setItem('formulaPresets', JSON.stringify(newPresets));
-                      recordHistory(editingFormulaPreset ? `Updated formula preset ${name}` : `Added formula preset ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, newPresets);
+                      setFormulaTemplates(newTemplates);
+                      localStorage.setItem('formulaTemplates', JSON.stringify(newTemplates));
+                      recordHistory(editingFormulaTemplate ? `Updated formula template ${name}` : `Added formula template ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, newTemplates);
                       
                       // Reset form
                       nameInput.value = '';
                       formulaInput.value = '';
                       descInput.value = '';
                       scopeInput.value = 'global';
-                      setEditingFormulaPreset(null);
+                      setEditingFormulaTemplate(null);
                     }}
                     className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded transition"
                   >
-                    {editingFormulaPreset ? 'Update Preset' : 'Add Preset'}
+                    {editingFormulaTemplate ? 'Update Template' : 'Add Template'}
                   </button>
                 </div>
               </div>
             </div>
             
             <div className="flex-1 overflow-hidden flex flex-col">
-              <h3 className="text-sm font-bold text-slate-700 mb-2">Existing Presets</h3>
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="text-sm font-bold text-slate-700">Existing Templates</h3>
+                <div className="flex gap-2">
+                  <div className="relative">
+                    <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-slate-400" />
+                    <input 
+                      type="text" 
+                      placeholder="Search..." 
+                      value={templateSearch}
+                      onChange={(e) => setTemplateSearch(e.target.value)}
+                      className="pl-7 pr-2 py-1 text-xs border rounded outline-none focus:border-indigo-500 w-32"
+                    />
+                  </div>
+                  <select 
+                    value={templateScopeFilter}
+                    onChange={(e) => setTemplateScopeFilter(e.target.value)}
+                    className="text-xs border rounded p-1 outline-none focus:border-indigo-500"
+                  >
+                    <option value="all">All Scopes</option>
+                    <option value="global">Global</option>
+                    <option value="category">Category</option>
+                    <option value="subcategory">Sub-Category</option>
+                    <option value="itemgroup">Item Group</option>
+                    <option value="material">Material</option>
+                  </select>
+                </div>
+              </div>
+              
               <div className="flex-1 overflow-y-auto border rounded bg-white">
-                {formulaPresets.length === 0 ? (
-                  <div className="p-4 text-center text-sm text-slate-400 italic">No formula presets defined.</div>
+                {formulaTemplates.length === 0 ? (
+                  <div className="p-4 text-center text-sm text-slate-400 italic">No formula templates defined.</div>
                 ) : (
                   <table className="w-full text-left text-sm">
                     <thead className="bg-slate-50 sticky top-0">
                       <tr>
                         <th className="p-2 border-b font-bold text-slate-600">Name</th>
                         <th className="p-2 border-b font-bold text-slate-600">Scope</th>
-                        <th className="p-2 border-b font-bold text-slate-600">Formula</th>
+                        <th className="p-2 border-b font-bold text-slate-600">Variables</th>
                         <th className="p-2 border-b font-bold text-slate-600 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {formulaPresets.map(p => (
-                        <tr key={p.id} className="border-b last:border-0 hover:bg-slate-50">
-                          <td className="p-2 font-medium text-slate-800">{p.name}</td>
-                          <td className="p-2 text-xs text-slate-500 capitalize">{p.scope}</td>
-                          <td className="p-2 font-mono text-xs text-indigo-700 truncate max-w-[200px]" title={p.formula}>{p.formula}</td>
+                      {formulaTemplates
+                        .filter(t => {
+                          const matchesSearch = t.name.toLowerCase().includes(templateSearch.toLowerCase()) || 
+                                              (t.description && t.description.toLowerCase().includes(templateSearch.toLowerCase()));
+                          const matchesScope = templateScopeFilter === 'all' || t.scope === templateScopeFilter;
+                          return matchesSearch && matchesScope;
+                        })
+                        .map(t => (
+                        <tr key={t.id} className="border-b last:border-0 hover:bg-slate-50">
+                          <td className="p-2 font-medium text-slate-800">
+                            <div>{t.name}</div>
+                            {t.description && <div className="text-[10px] text-slate-400 font-normal">{t.description}</div>}
+                          </td>
+                          <td className="p-2 text-xs text-slate-500 capitalize">{t.scope}</td>
+                          <td className="p-2">
+                            <div className="flex flex-wrap gap-1">
+                              {t.variables.map(v => (
+                                <span key={v} className="text-[10px] bg-indigo-50 text-indigo-600 px-1 rounded border border-indigo-100">{v}</span>
+                              ))}
+                            </div>
+                          </td>
                           <td className="p-2 text-right whitespace-nowrap">
                             <button 
                               onClick={() => {
-                                setEditingFormulaPreset(p);
+                                setEditingFormulaTemplate(t);
                                 setTimeout(() => {
-                                  const nameInput = document.getElementById('fp-name') as HTMLInputElement;
-                                  const formulaInput = document.getElementById('fp-formula') as HTMLInputElement;
-                                  const descInput = document.getElementById('fp-desc') as HTMLInputElement;
-                                  const scopeInput = document.getElementById('fp-scope') as HTMLSelectElement;
-                                  if (nameInput) nameInput.value = p.name;
-                                  if (formulaInput) formulaInput.value = p.formula;
-                                  if (descInput) descInput.value = p.description || '';
-                                  if (scopeInput) scopeInput.value = p.scope;
+                                  const nameInput = document.getElementById('ft-name') as HTMLInputElement;
+                                  const formulaInput = document.getElementById('ft-formula') as HTMLInputElement;
+                                  const descInput = document.getElementById('ft-desc') as HTMLInputElement;
+                                  const scopeInput = document.getElementById('ft-scope') as HTMLSelectElement;
+                                  if (nameInput) nameInput.value = t.name;
+                                  if (formulaInput) formulaInput.value = t.formula;
+                                  if (descInput) descInput.value = t.description || '';
+                                  if (scopeInput) scopeInput.value = t.scope;
                                 }, 10);
                               }}
                               className="text-blue-500 hover:text-blue-700 mr-3 text-xs"
@@ -2825,12 +2948,12 @@ export default function EstimatorApp() {
                             </button>
                             <button 
                               onClick={() => {
-                                if (window.confirm(`Delete preset "${p.name}"?`)) {
-                                  const newPresets = formulaPresets.filter(fp => fp.id !== p.id);
-                                  setFormulaPresets(newPresets);
-                                  localStorage.setItem('formulaPresets', JSON.stringify(newPresets));
-                                  recordHistory(`Deleted formula preset ${p.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, newPresets);
-                                  if (editingFormulaPreset?.id === p.id) setEditingFormulaPreset(null);
+                                if (window.confirm(`Delete template "${t.name}"?`)) {
+                                  const newTemplates = formulaTemplates.filter(ft => ft.id !== t.id);
+                                  setFormulaTemplates(newTemplates);
+                                  localStorage.setItem('formulaTemplates', JSON.stringify(newTemplates));
+                                  recordHistory(`Deleted formula template ${t.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, newTemplates);
+                                  if (editingFormulaTemplate?.id === t.id) setEditingFormulaTemplate(null);
                                 }
                               }}
                               className="text-red-500 hover:text-red-700 text-xs"
@@ -3070,29 +3193,48 @@ export default function EstimatorApp() {
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
                   <label className="text-xs font-bold text-slate-500 uppercase">Formula Editor</label>
-                  {formulaPresets.length > 0 && (
+                  {formulaTemplates.length > 0 && (
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-500">Apply Preset:</span>
+                      <span className="text-xs text-slate-500">Apply Template:</span>
                       <select 
                         className="text-xs border rounded p-1 outline-none focus:border-indigo-500"
                         onChange={(e) => {
                           if (e.target.value) {
-                            const preset = formulaPresets.find(p => p.id === e.target.value);
-                            if (preset) {
-                              setCustomFormula(preset.formula);
+                            const template = formulaTemplates.find(t => t.id === e.target.value);
+                            if (template) {
+                              if (template.variables.length > 0) {
+                                setTemplateToApply(template);
+                                // Auto-map variables if they exist in registry
+                                const initialMappings: Record<string, string> = {};
+                                template.variables.forEach(v => {
+                                  if (variableRegistry[v]) {
+                                    initialMappings[v] = `[${v}]`;
+                                  } else if (v === 'Take-off' || v === 'Takeoff') {
+                                    initialMappings[v] = '[Take-off]';
+                                  } else if (v === 'Overage %' || v === 'Overage') {
+                                    initialMappings[v] = '[Overage %]';
+                                  } else if (v === 'Order') {
+                                    initialMappings[v] = '[Order]';
+                                  }
+                                });
+                                setVariableMappings(initialMappings);
+                                setMappingModalOpen(true);
+                              } else {
+                                setCustomFormula(template.formula);
+                              }
                             }
                             e.target.value = ""; // Reset select
                           }
                         }}
                       >
-                        <option value="">-- Select Preset --</option>
+                        <option value="">-- Select Template --</option>
                         {['global', 'category', 'subcategory', 'itemgroup', 'material'].map(scope => {
-                          const scopedPresets = formulaPresets.filter(p => p.scope === scope);
-                          if (scopedPresets.length === 0) return null;
+                          const scopedTemplates = formulaTemplates.filter(t => t.scope === scope);
+                          if (scopedTemplates.length === 0) return null;
                           return (
                             <optgroup key={scope} label={scope.charAt(0).toUpperCase() + scope.slice(1)}>
-                              {scopedPresets.map(p => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
+                              {scopedTemplates.map(t => (
+                                <option key={t.id} value={t.id}>{t.name}</option>
                               ))}
                             </optgroup>
                           );
@@ -3143,16 +3285,35 @@ export default function EstimatorApp() {
                         <h5 className="text-xs font-bold text-slate-500 uppercase">Variables</h5>
                         <div className="flex gap-1">
                           <button 
-                            onClick={() => setFormulaPresetModalOpen(true)}
+                            onClick={() => {
+                              if (!customFormula) return;
+                              setEditingFormulaTemplate({
+                                id: "FT-" + Date.now(),
+                                name: "",
+                                formula: customFormula,
+                                variables: extractVariablesFromFormula(customFormula),
+                                scope: 'global',
+                                createdAt: new Date().toISOString()
+                              });
+                              setFormulaTemplateModalOpen(true);
+                            }}
+                            className="text-[10px] bg-emerald-50 hover:bg-emerald-100 text-emerald-600 px-2 py-1 rounded border border-emerald-200 transition flex items-center gap-1"
+                            title="Save current formula as template"
+                          >
+                            <Save size={10} />
+                            Save Current
+                          </button>
+                          <button 
+                            onClick={() => setFormulaTemplateModalOpen(true)}
                             className="text-[10px] bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-2 py-1 rounded border border-indigo-200 transition"
                           >
-                            Presets
+                            Library
                           </button>
                           <button 
                             onClick={() => setCustomVarModalOpen(true)}
                             className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded border border-slate-200 transition"
                           >
-                            Manage Custom
+                            Custom
                           </button>
                         </div>
                       </div>
@@ -3177,6 +3338,65 @@ export default function EstimatorApp() {
                           </div>
                         ))}
                         
+                        {/* Formula Templates Section */}
+                        <div className="mt-4 border-t pt-4">
+                          <h5 className="text-xs font-bold text-slate-500 uppercase mb-2">Formula Templates</h5>
+                          <div className="flex flex-col gap-2">
+                            {formulaTemplates.length === 0 ? (
+                              <div className="text-[10px] text-slate-400 italic p-2 bg-slate-50 rounded border border-dashed border-slate-200">No templates available.</div>
+                            ) : (
+                              formulaTemplates
+                                .filter(t => {
+                                  const item = catalog.find(i => i.item_id === qtyPanelItemId);
+                                  if (t.scope === 'global') return true;
+                                  if (!item) return false;
+                                  if (t.scope === 'category' && t.name.includes(item.category)) return true; // Simple check for now
+                                  return true; // Show all for now, filter logic can be improved
+                                })
+                                .map(t => (
+                                <div key={t.id} className="flex items-start justify-between group bg-indigo-50 hover:bg-indigo-100 p-2 rounded border border-indigo-200 transition">
+                                  <div className="flex-1 pr-2">
+                                    <div className="font-bold text-xs text-indigo-800">{t.name}</div>
+                                    <div className="text-[10px] text-slate-500 mb-1 truncate max-w-[150px]">{t.formula}</div>
+                                    <div className="flex flex-wrap gap-1">
+                                      {t.variables.map(v => (
+                                        <span key={v} className="text-[8px] bg-white text-indigo-500 px-1 rounded border border-indigo-100">{v}</span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <button 
+                                    onClick={() => {
+                                      if (t.variables.length > 0) {
+                                        setTemplateToApply(t);
+                                        // Auto-map variables if they exist in registry
+                                        const initialMappings: Record<string, string> = {};
+                                        t.variables.forEach(v => {
+                                          if (variableRegistry[v]) {
+                                            initialMappings[v] = `[${v}]`;
+                                          } else if (v === 'Take-off' || v === 'Takeoff') {
+                                            initialMappings[v] = '[Take-off]';
+                                          } else if (v === 'Overage %' || v === 'Overage') {
+                                            initialMappings[v] = '[Overage %]';
+                                          } else if (v === 'Order') {
+                                            initialMappings[v] = '[Order]';
+                                          }
+                                        });
+                                        setVariableMappings(initialMappings);
+                                        setMappingModalOpen(true);
+                                      } else {
+                                        setCustomFormula(t.formula);
+                                      }
+                                    }} 
+                                    className="text-xs bg-white hover:bg-indigo-50 text-indigo-600 px-2 py-1 rounded border border-indigo-200 opacity-0 group-hover:opacity-100 transition shrink-0"
+                                  >
+                                    Apply
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
                         {/* Predefined Variables */}
                         {FORMULA_VARIABLES.filter(v => 
                           v.name.toLowerCase().includes(formulaHelpSearch.toLowerCase()) || 
