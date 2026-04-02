@@ -47,7 +47,69 @@ const formulaHighlightPlugin = ViewPlugin.fromClass(class {
   decorations: v => v.decorations
 });
 
-const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: DynamicColumn[], item: Item | undefined) => (context: CompletionContext): CompletionResult | null => {
+const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: DynamicColumn[], dataTables: DataTable[], item: Item | undefined) => (context: CompletionContext): CompletionResult | null => {
+  // Check if we are inside LOOKUP(
+  const before = context.state.doc.sliceString(Math.max(0, context.pos - 100), context.pos);
+  const lookupMatch = before.match(/LOOKUP\s*\(\s*([^)]*)$/);
+  
+  if (lookupMatch) {
+    const argsStr = lookupMatch[1];
+    const args = [];
+    let currentArg = "";
+    let inQuotes = false;
+    let quoteChar = "";
+    for (let i = 0; i < argsStr.length; i++) {
+      const char = argsStr[i];
+      if ((char === '"' || char === "'") && (i === 0 || argsStr[i - 1] !== '\\')) {
+        if (!inQuotes) {
+          inQuotes = true;
+          quoteChar = char;
+        } else if (char === quoteChar) {
+          inQuotes = false;
+          quoteChar = "";
+        }
+      }
+      if (char === ',' && !inQuotes) {
+        args.push(currentArg);
+        currentArg = "";
+      } else {
+        currentArg += char;
+      }
+    }
+    args.push(currentArg);
+    const argCount = args.length;
+    
+    // We want to match the current partial argument
+    let word = context.matchBefore(/["']?[a-zA-Z0-9_ %-]*$/);
+    
+    if (argCount === 1) {
+      // Suggest table names
+      return {
+        from: word ? word.from : context.pos,
+        options: dataTables.map(dt => ({
+          label: `"${dt.name}"`,
+          type: 'constant',
+          info: `Data Table: ${dt.name} (${dt.rows.length} rows)`,
+          apply: `"${dt.name}"`
+        }))
+      };
+    } else if (argCount === 2 || argCount === 4) {
+      const tableName = args[0].trim().replace(/["']/g, '');
+      const table = dataTables.find(dt => dt.name === tableName);
+      if (table) {
+        return {
+          from: word ? word.from : context.pos,
+          options: table.columns.map(col => ({
+            label: `"${col.key}"`,
+            type: 'property',
+            info: `Column: ${col.name} (${col.type})`,
+            apply: `"${col.key}"`
+          }))
+        };
+      }
+    }
+  }
+
   let word = context.matchBefore(/\[?[a-zA-Z0-9_ %-]*$/);
   if (!word || (word.from === word.to && !context.explicit))
     return null;
@@ -101,6 +163,7 @@ const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: Dynami
       { label: 'MIN', type: 'function', info: 'Minimum of values. Ex: MIN([Take-off], 100)', apply: 'MIN(' },
       { label: 'CEILING', type: 'function', info: 'Round up to nearest integer. Ex: CEILING([Take-off] / [Order])', apply: 'CEILING(' },
       { label: 'FLOOR', type: 'function', info: 'Round down to nearest integer. Ex: FLOOR([Take-off] / [Order])', apply: 'FLOOR(' },
+      { label: 'LOOKUP', type: 'function', info: 'Lookup value in a data table. Ex: LOOKUP("Table", "SearchCol", Value, "ResultCol")', apply: 'LOOKUP(' },
       { label: '[Take-off]', type: 'variable', info: 'Measured Quantity. Ex: [Take-off] * 1.05' },
       { label: '[Overage %]', type: 'variable', info: 'Waste Factor Percentage. Ex: 1 + ([Overage %] / 100)' },
       { label: '[Order]', type: 'variable', info: 'Package/Divisor. Ex: [Take-off] / [Order]' }
@@ -310,8 +373,8 @@ export default function EstimatorApp() {
 
   const formulaCompletions = useMemo(() => {
     const item = catalog.find(i => i.item_id === qtyPanelItemId);
-    return getFormulaCompletions(customVariables, dynamicColumns, item);
-  }, [customVariables, dynamicColumns, catalog, qtyPanelItemId]);
+    return getFormulaCompletions(customVariables, dynamicColumns, dataTables, item);
+  }, [customVariables, dynamicColumns, dataTables, catalog, qtyPanelItemId]);
 
   const resolveDynamicScope = useCallback((item: Item | undefined, cols: DynamicColumn[] = dynamicColumns) => {
     const scope: Record<string, any> = {};
