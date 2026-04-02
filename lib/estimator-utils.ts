@@ -218,15 +218,35 @@ export function evaluateCustomFormula(
 export function validateCustomFormula(
     formulaStr: string,
     customVars: { name: string, value: number }[] = [],
-    dynamicScope: Record<string, any> = {}
+    dynamicScope: Record<string, any> = {},
+    variableRegistry?: Record<string, { key: string, scope: string, type: string }>
 ): { valid: boolean; error?: string } {
     if (!formulaStr) return { valid: true };
 
+    let missingVars: string[] = [];
+    
     let parsed = formulaStr.replace(/\[(.*?)\]/g, (match, p1) => {
         if (p1 === 'Overage %') return 'Overage';
         if (p1 === 'Take-off') return 'Takeoff';
+        if (p1 === 'Order') return 'Order';
+        if (p1 === 'Category' || p1 === 'SubCategory' || p1 === 'ItemGroup' || p1 === 'ItemName' || p1 === 'UOM') return p1;
+        
+        if (variableRegistry) {
+            const reg = variableRegistry[p1];
+            if (!reg) {
+                missingVars.push(p1);
+            } else if (reg.type !== 'number' && reg.type !== 'boolean') {
+                // Text variables can't be used in math formulas
+                missingVars.push(`${p1} (invalid type: ${reg.type})`);
+            }
+        }
+        
         return p1.replace(/[^a-zA-Z0-9_]/g, '_');
     });
+
+    if (missingVars.length > 0) {
+        return { valid: false, error: `Missing or invalid variables: ${missingVars.join(', ')}` };
+    }
 
     parsed = parsed.replace(/\bROUNDUP\b/ig, 'ceil')
                    .replace(/\bROUNDDOWN\b/ig, 'floor')
