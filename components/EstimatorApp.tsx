@@ -586,7 +586,6 @@ export default function EstimatorApp() {
     // 1. Material level
     const matKey = `MATERIAL:${item.item_id}`;
     if (entityData[matKey]) Object.assign(scope, entityData[matKey]);
-    if (item.dynamicFields) Object.assign(scope, item.dynamicFields);
 
     return scope;
   }, [entityData, dynamicColumns]);
@@ -648,7 +647,7 @@ export default function EstimatorApp() {
     if (diagnostics.length === 0) {
       const item = catalog.find(i => i.item_id === qtyPanelItemId);
       const validation = validateCustomFormula(doc, customVariables, resolveDynamicScope(item), variableRegistry);
-      if (!validation.valid) {
+      if (!validation.isValid) {
         diagnostics.push({
           from: 0,
           to: doc.length,
@@ -1219,8 +1218,7 @@ export default function EstimatorApp() {
           newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
           newData[itemId].order_qty,
           newVars,
-          scope,
-          currentDataTables
+          scope
         ).toString();
         
         if (newQty !== newData[itemId].measured_qty) {
@@ -1268,7 +1266,6 @@ export default function EstimatorApp() {
       }
       const matKey = `MATERIAL:${item.item_id}`;
       if (eData[matKey]) Object.assign(scope, eData[matKey]);
-      if (item.dynamicFields) Object.assign(scope, item.dynamicFields);
       
       // Add default values from columns
       currentDynamicColumns.forEach(col => {
@@ -3316,7 +3313,59 @@ export default function EstimatorApp() {
             </div>
             
             <div>
-              <h3 className="text-sm font-bold text-slate-700 mb-2">Existing Clients</h3>
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="text-sm font-bold text-slate-700">Existing Clients</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(clients, null, 2));
+                      const downloadAnchorNode = document.createElement('a');
+                      downloadAnchorNode.setAttribute("href", dataStr);
+                      downloadAnchorNode.setAttribute("download", "clients_export.json");
+                      document.body.appendChild(downloadAnchorNode);
+                      downloadAnchorNode.click();
+                      downloadAnchorNode.remove();
+                    }}
+                    className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded font-bold transition flex items-center gap-1"
+                  >
+                    <Download size={14} /> Export JSON
+                  </button>
+                  <label className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded font-bold transition flex items-center gap-1 cursor-pointer">
+                    <Upload size={14} /> Import JSON
+                    <input 
+                      type="file" 
+                      accept=".json" 
+                      className="hidden" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                          try {
+                            const importedClients = JSON.parse(event.target?.result as string);
+                            if (Array.isArray(importedClients)) {
+                              const isValid = importedClients.every(c => c.id && c.name);
+                              if (isValid) {
+                                setClients(importedClients);
+                                localStorage.setItem('userClients', JSON.stringify(importedClients));
+                                alert(`Successfully imported ${importedClients.length} clients.`);
+                              } else {
+                                alert("Invalid client data format. Missing required fields.");
+                              }
+                            } else {
+                              alert("Invalid JSON format. Expected an array of clients.");
+                            }
+                          } catch (err) {
+                            alert("Error parsing JSON file.");
+                          }
+                        };
+                        reader.readAsText(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
               <div className="max-h-48 overflow-y-auto border rounded bg-white">
                 {clients.length === 0 ? (
                   <div className="p-4 text-center text-sm text-slate-400 italic">No clients defined.</div>
