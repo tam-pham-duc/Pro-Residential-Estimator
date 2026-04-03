@@ -19,6 +19,7 @@ export interface TakeoffItem {
   evidence: string;
   qty_mode: 'auto' | 'manual' | 'guide';
   custom_formula: string;
+  unit_price?: string;
 }
 
 export interface CustomVariable {
@@ -57,6 +58,7 @@ export interface FormulaTemplate {
   description: string;
   scope: string;
   variables: string[];
+  createdAt: string;
 }
 
 export interface ProjectTemplate {

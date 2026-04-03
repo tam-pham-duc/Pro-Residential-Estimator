@@ -1344,7 +1344,8 @@ export default function EstimatorApp() {
         newData[itemId] = {
           in_scope: false, spec: "", qty: "", measured_qty: "",
           overage_pct: defaultOverage, order_qty: "", evidence: "",
-          qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
+          qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA,
+          unit_price: ""
         };
       }
 
@@ -1664,6 +1665,7 @@ export default function EstimatorApp() {
     const { newData: freshTakeoffData } = recalculateAllFormulas(customVariables, entityData, true);
 
     const newJob: Job = {
+      id: currentJobId || Date.now().toString(),
       projectName,
       clientName,
       jobNotes,
@@ -1674,7 +1676,9 @@ export default function EstimatorApp() {
       dynamicColumns,
       entityData,
       formulaTemplates,
-      dataTables
+      dataTables,
+      catalog,
+      defaultOveragePct
     };
 
     if (user) {
@@ -4597,6 +4601,7 @@ export default function EstimatorApp() {
                                 id: "FT-" + Date.now(),
                                 name: "",
                                 formula: customFormula,
+                                description: "",
                                 variables: extractVariablesFromFormula(customFormula),
                                 scope: 'global',
                                 createdAt: new Date().toISOString()
@@ -4681,10 +4686,10 @@ export default function EstimatorApp() {
                           <div className="flex flex-col gap-2">
                             {formulaTemplates.length === 0 ? (
                               <div className="text-[10px] text-slate-400 italic p-2 bg-slate-50 rounded border border-dashed border-slate-200">No templates available.</div>
-                            ) : (
-                              formulaTemplates
+                            ) : (() => {
+                              const item = catalog.find(i => i.item_id === qtyPanelItemId);
+                              return formulaTemplates
                                 .filter(t => {
-                                  const item = catalog.find(i => i.item_id === qtyPanelItemId);
                                   if (t.scope === 'global') return true;
                                   if (!item) return false;
                                   if (t.scope === 'category' && t.name.includes(item.category)) return true; // Simple check for now
@@ -4705,32 +4710,20 @@ export default function EstimatorApp() {
                                     onClick={() => {
                                       if (t.variables.length > 0) {
                                         setTemplateToApply(t);
-                                        // Auto-map variables if they exist in registry
-                                        const initialMappings: Record<string, string> = {};
-                                        t.variables.forEach(v => {
-                                          if (variableRegistry[v]) {
-                                            initialMappings[v] = `[${v}]`;
-                                          } else if (v === 'Take-off' || v === 'Takeoff') {
-                                            initialMappings[v] = '[Take-off]';
-                                          } else if (v === 'Overage %' || v === 'Overage') {
-                                            initialMappings[v] = '[Overage %]';
-                                          } else if (v === 'Order') {
-                                            initialMappings[v] = '[Order]';
-                                          }
-                                        });
+                                        const initialMappings = autoMapVariables(t, item);
                                         setVariableMappings(initialMappings);
                                         setMappingModalOpen(true);
                                       } else {
                                         setCustomFormula(t.formula);
                                       }
-                                    }} 
+                                    }}
                                     className="text-xs bg-white hover:bg-indigo-50 text-indigo-600 px-2 py-1 rounded border border-indigo-200 opacity-0 group-hover:opacity-100 transition shrink-0"
                                   >
                                     Apply
                                   </button>
                                 </div>
-                              ))
-                            )}
+                              ));
+                            })()}
                           </div>
                         </div>
 
