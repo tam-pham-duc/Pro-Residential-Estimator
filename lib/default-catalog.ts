@@ -15,3 +15,5 @@ export const DEFAULT_CATALOG: CatalogItem[] = [
     category: "General",
   },
 ];
+
+export const defaultCatalog = DEFAULT_CATALOG;
