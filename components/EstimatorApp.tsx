@@ -5,7 +5,7 @@ import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables, extractVariablesFromFormula } from '@/lib/estimator-utils';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable } from '@/lib/types';
 import { 
-  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns,
+  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
   Undo2, Redo2, Copy, Users, Folder, BookOpen
 } from 'lucide-react';
@@ -340,6 +340,15 @@ export default function EstimatorApp() {
   const [dataTables, setDataTables] = useState<DataTable[]>([]);
   const [dataTableModalOpen, setDataTableModalOpen] = useState(false);
   const [editingDataTable, setEditingDataTable] = useState<DataTable | null>(null);
+
+  const [bomExportModalOpen, setBomExportModalOpen] = useState(false);
+  const [bomExportOptions, setBomExportOptions] = useState({
+    includeSpec: true,
+    includeOveragePct: true,
+    includeOrderQty: true,
+    includeReference: true,
+    onlyInScope: true
+  });
 
   const moveColumn = (index: number, direction: 'up' | 'down') => {
     const newCols = [...dynamicColumns];
@@ -1648,42 +1657,57 @@ export default function EstimatorApp() {
     }
   };
 
-  const exportBOM = () => {
+  const performBOMExport = () => {
     // Force recalculate all formulas to ensure exported data is fresh
     const { newData: freshTakeoffData } = recalculateAllFormulas(customVariables, entityData, true);
 
     const projName = projectName || "Unnamed_Job";
-    let csvContent = "Category,Sub-Category,Sub-Item Group,MATERIAL,Spec,Take-off,OVERAGE %,Order,Qty,UOM,REFERENCE,Rule / Note\n";
+    
+    // Build headers based on options
+    const headers = ["Category", "Sub-Category", "Sub-Item Group", "MATERIAL"];
+    if (bomExportOptions.includeSpec) headers.push("Spec");
+    headers.push("Take-off");
+    if (bomExportOptions.includeOveragePct) headers.push("OVERAGE %");
+    if (bomExportOptions.includeOrderQty) headers.push("Order");
+    headers.push("Qty", "UOM");
+    if (bomExportOptions.includeReference) headers.push("REFERENCE");
+    headers.push("Rule / Note");
+
+    let csvContent = headers.join(",") + "\n";
     let hasItems = false;
 
     for (const [itemId, data] of Object.entries(freshTakeoffData)) {
-      if (data.in_scope) {
+      // Respect 'In Scope' filter
+      if (!bomExportOptions.onlyInScope || data.in_scope) {
         hasItems = true;
         const itemInfo = catalog.find(i => i.item_id === itemId);
         if (!itemInfo) continue;
 
         const escapeCSV = (text: string) => `"${(text || '').toString().replace(/"/g, '""')}"`;
         const fullNotes = itemInfo.calc_factor_instruction + (itemInfo.notes ? " | Note: " + itemInfo.notes : "");
+        
         const row = [
           escapeCSV(itemInfo.category),
           escapeCSV(itemInfo.sub_category),
           escapeCSV(itemInfo.sub_item_1 || "General"),
-          escapeCSV(itemInfo.item_name),
-          escapeCSV(data.spec),
-          escapeCSV(data.qty),
-          escapeCSV(data.overage_pct),
-          escapeCSV(data.order_qty),
-          escapeCSV(data.measured_qty),
-          escapeCSV(itemInfo.uom),
-          escapeCSV(data.evidence),
-          escapeCSV(fullNotes)
+          escapeCSV(itemInfo.item_name)
         ];
+        
+        if (bomExportOptions.includeSpec) row.push(escapeCSV(data.spec));
+        row.push(escapeCSV(data.qty));
+        if (bomExportOptions.includeOveragePct) row.push(escapeCSV(data.overage_pct));
+        if (bomExportOptions.includeOrderQty) row.push(escapeCSV(data.order_qty));
+        row.push(escapeCSV(data.measured_qty));
+        row.push(escapeCSV(itemInfo.uom));
+        if (bomExportOptions.includeReference) row.push(escapeCSV(data.evidence));
+        row.push(escapeCSV(fullNotes));
+
         csvContent += row.join(",") + "\n";
       }
     }
 
     if (!hasItems) {
-      alert("BOM is empty! Please check 'In Scope' for at least one item.");
+      alert("BOM is empty! Please check your filters and item scope.");
       return;
     }
 
@@ -1695,6 +1719,11 @@ export default function EstimatorApp() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setBomExportModalOpen(false);
+  };
+
+  const exportBOM = () => {
+    setBomExportModalOpen(true);
   };
 
   const exportJobJson = () => {
@@ -4934,6 +4963,95 @@ export default function EstimatorApp() {
               </table>
             </div>
             <button onClick={() => setHistoryModalOpen(false)} className="mt-4 bg-slate-200 hover:bg-slate-300 py-2 rounded font-bold transition">Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* BOM Export Modal */}
+      {bomExportModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[70]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-md p-6 border-t-4 border-blue-600">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                <Download className="text-blue-600" size={24} /> Export BOM Options
+              </h2>
+              <button onClick={() => setBomExportModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            
+            <div className="space-y-4 mb-6">
+              <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
+                <h3 className="text-sm font-bold text-slate-700 mb-3 uppercase tracking-wider">Column Customization</h3>
+                <div className="grid grid-cols-1 gap-3">
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <input 
+                      type="checkbox" 
+                      checked={bomExportOptions.includeSpec}
+                      onChange={(e) => setBomExportOptions({...bomExportOptions, includeSpec: e.target.checked})}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm font-medium text-slate-700 group-hover:text-blue-600 transition-colors">Include &apos;Spec&apos; Column</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <input 
+                      type="checkbox" 
+                      checked={bomExportOptions.includeOveragePct}
+                      onChange={(e) => setBomExportOptions({...bomExportOptions, includeOveragePct: e.target.checked})}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm font-medium text-slate-700 group-hover:text-blue-600 transition-colors">Include &apos;OVERAGE %&apos; Column</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <input 
+                      type="checkbox" 
+                      checked={bomExportOptions.includeOrderQty}
+                      onChange={(e) => setBomExportOptions({...bomExportOptions, includeOrderQty: e.target.checked})}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm font-medium text-slate-700 group-hover:text-blue-600 transition-colors">Include &apos;Order&apos; Column</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <input 
+                      type="checkbox" 
+                      checked={bomExportOptions.includeReference}
+                      onChange={(e) => setBomExportOptions({...bomExportOptions, includeReference: e.target.checked})}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-sm font-medium text-slate-700 group-hover:text-blue-600 transition-colors">Include &apos;REFERENCE&apos; Column</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
+                <h3 className="text-sm font-bold text-blue-800 mb-3 uppercase tracking-wider">Filter Options</h3>
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <input 
+                    type="checkbox" 
+                    checked={bomExportOptions.onlyInScope}
+                    onChange={(e) => setBomExportOptions({...bomExportOptions, onlyInScope: e.target.checked})}
+                    className="w-4 h-4 rounded border-blue-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-bold text-blue-900 group-hover:text-blue-700 transition-colors">Export Only &apos;In Scope&apos; Items</span>
+                </label>
+                <p className="text-[10px] text-blue-600 mt-2 ml-7 italic">
+                  When enabled, items marked as &quot;Out of Scope&quot; will be excluded from the CSV.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setBomExportModalOpen(false)} 
+                className="flex-1 px-4 py-2 text-slate-600 font-bold hover:bg-slate-100 rounded transition border border-slate-200"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={performBOMExport} 
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold transition shadow-md flex items-center justify-center gap-2"
+              >
+                <Download size={18} /> Generate CSV
+              </button>
+            </div>
           </div>
         </div>
       )}
