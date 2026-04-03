@@ -4,8 +4,9 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables, extractVariablesFromFormula } from '@/lib/estimator-utils';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable } from '@/lib/types';
-import { supabase } from '@/lib/supabase';
-import { User } from '@supabase/supabase-js';
+import { auth, db } from '@/lib/firebase';
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, User } from 'firebase/auth';
+import { doc, getDoc, setDoc, collection, onSnapshot, query, where, deleteDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
@@ -324,17 +325,104 @@ export default function EstimatorApp() {
     }
   }, [editingColumn]);
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-    });
+  const migrateLocalStorageToFirestore = useCallback(async (uid: string) => {
+    const userDocRef = doc(db, 'users', uid);
+    
+    const catalogData = localStorage.getItem('userItemCatalog');
+    const clientsData = localStorage.getItem('userClients');
+    const formulaTemplatesData = localStorage.getItem('formulaTemplates');
+    const dataTablesData = localStorage.getItem('userDataTables');
+    const dynamicColumnsData = localStorage.getItem('userDynamicColumns');
+    const projectTemplatesData = localStorage.getItem('projectTemplates');
+    const defaultOverage = localStorage.getItem('defaultOveragePct');
+    const showPricing = localStorage.getItem('showPricingColumns');
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
+    const userData: any = {
+      uid,
+      email: auth.currentUser?.email,
+      lastUpdated: serverTimestamp(),
+    };
 
-    return () => subscription.unsubscribe();
+    if (catalogData) userData.catalog = JSON.parse(catalogData);
+    if (clientsData) userData.clients = JSON.parse(clientsData);
+    if (formulaTemplatesData) userData.formulaTemplates = JSON.parse(formulaTemplatesData);
+    if (dataTablesData) userData.dataTables = JSON.parse(dataTablesData);
+    if (dynamicColumnsData) userData.dynamicColumns = JSON.parse(dynamicColumnsData);
+    if (projectTemplatesData) userData.projectTemplates = JSON.parse(projectTemplatesData);
+    if (defaultOverage) userData.defaultOveragePct = defaultOverage;
+    if (showPricing) userData.showPricingColumns = showPricing === 'true';
+
+    await setDoc(userDocRef, userData, { merge: true });
+
+    // Migrate jobs
+    const savedJobsLocal = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
+    for (const jobId in savedJobsLocal) {
+      const jobDocRef = doc(db, 'users', uid, 'jobs', jobId);
+      await setDoc(jobDocRef, { ...savedJobsLocal[jobId], id: jobId }, { merge: true });
+    }
   }, []);
+
+  const syncUserData = useCallback(async (uid: string) => {
+    const userDocRef = doc(db, 'users', uid);
+    
+    // Listen for real-time updates to global settings
+    const unsubUser = onSnapshot(userDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.catalog) setCatalog(data.catalog);
+        if (data.clients) setClients(data.clients);
+        if (data.formulaTemplates) setFormulaTemplates(data.formulaTemplates);
+        if (data.dataTables) setDataTables(data.dataTables);
+        if (data.dynamicColumns) setDynamicColumns(data.dynamicColumns);
+        if (data.projectTemplates) setTemplates(data.projectTemplates);
+        if (data.defaultOveragePct) setDefaultOveragePct(data.defaultOveragePct);
+        if (data.showPricingColumns !== undefined) setShowPricingColumns(data.showPricingColumns);
+      } else {
+        // First time login: migrate from localStorage if available
+        migrateLocalStorageToFirestore(uid);
+      }
+    }, (error) => {
+      console.error("Firestore Error (User Settings):", error);
+    });
+
+    // Listen for real-time updates to jobs
+    const jobsQuery = collection(db, 'users', uid, 'jobs');
+    const unsubJobs = onSnapshot(jobsQuery, (snapshot) => {
+      const jobs: Record<string, Job> = {};
+      snapshot.forEach((doc) => {
+        jobs[doc.id] = doc.data() as Job;
+      });
+      setSavedJobs(jobs);
+    }, (error) => {
+      console.error("Firestore Error (Jobs):", error);
+    });
+
+    return () => {
+      unsubUser();
+      unsubJobs();
+    };
+  }, [migrateLocalStorageToFirestore]);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      if (user) {
+        // Load user data from Firestore
+        syncUserData(user.uid);
+      } else {
+        // Reset state when logged out
+        setCatalog(defaultCatalog);
+        setClients([]);
+        setFormulaTemplates([]);
+        setDataTables([]);
+        setDynamicColumns([]);
+        setTemplates([]);
+        setSavedJobs({});
+      }
+    });
+
+    return () => unsubscribe();
+  }, [syncUserData]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -343,19 +431,10 @@ export default function EstimatorApp() {
 
     try {
       if (authMode === 'signup') {
-        const { error } = await supabase.auth.signUp({
-          email: authEmail,
-          password: authPassword,
-        });
-        if (error) throw error;
-        alert('Check your email for the confirmation link!');
+        await createUserWithEmailAndPassword(auth, authEmail, authPassword);
         setAuthModalOpen(false);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: authEmail,
-          password: authPassword,
-        });
-        if (error) throw error;
+        await signInWithEmailAndPassword(auth, authEmail, authPassword);
         setAuthModalOpen(false);
       }
     } catch (err: any) {
@@ -366,7 +445,7 @@ export default function EstimatorApp() {
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
     setUser(null);
   };
 
@@ -632,105 +711,90 @@ export default function EstimatorApp() {
   }, [historyIndex]);
 
   useEffect(() => {
-    const savedCatalog = localStorage.getItem('userItemCatalog');
-    if (savedCatalog) {
-      setCatalog(JSON.parse(savedCatalog));
-    } else {
-       
-      setCatalog(defaultCatalog);
-    }
+    if (!user) {
+      const savedCatalog = localStorage.getItem('userItemCatalog');
+      if (savedCatalog) {
+        setCatalog(JSON.parse(savedCatalog));
+      } else {
+        setCatalog(defaultCatalog);
+      }
 
-    const savedClients = localStorage.getItem('userClients');
-    if (savedClients) {
-      try {
-        setClients(JSON.parse(savedClients));
-      } catch (e) {}
-    }
-
-    const savedFormulaTemplates = localStorage.getItem('formulaTemplates');
-    if (savedFormulaTemplates) {
-      try {
-        setFormulaTemplates(JSON.parse(savedFormulaTemplates));
-      } catch (e) {}
-    } else {
-      // Migration from old presets
-      const savedPresets = localStorage.getItem('formulaPresets');
-      if (savedPresets) {
+      const savedClients = localStorage.getItem('userClients');
+      if (savedClients) {
         try {
-          const presets = JSON.parse(savedPresets);
-          const templates = presets.map((p: any) => ({
-            ...p,
-            variables: extractVariablesFromFormula(p.formula),
-            createdAt: new Date().toISOString()
-          }));
-          setFormulaTemplates(templates);
-          localStorage.setItem('formulaTemplates', JSON.stringify(templates));
+          setClients(JSON.parse(savedClients));
         } catch (e) {}
+      }
+
+      const savedFormulaTemplates = localStorage.getItem('formulaTemplates');
+      if (savedFormulaTemplates) {
+        try {
+          setFormulaTemplates(JSON.parse(savedFormulaTemplates));
+        } catch (e) {}
+      }
+
+      const savedDataTables = localStorage.getItem('userDataTables');
+      if (savedDataTables) {
+        try {
+          setDataTables(JSON.parse(savedDataTables));
+        } catch (e) {}
+      }
+
+      const savedDynamicColumns = localStorage.getItem('userDynamicColumns');
+      if (savedDynamicColumns) {
+        try {
+          setDynamicColumns(JSON.parse(savedDynamicColumns));
+        } catch (e) {}
+      }
+
+      const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
+      setSavedJobs(jobs);
+      
+      const savedProjectTemplates = localStorage.getItem('projectTemplates');
+      if (savedProjectTemplates) {
+        setTemplates(JSON.parse(savedProjectTemplates));
+      }
+
+      const savedDefaultOverage = localStorage.getItem('defaultOveragePct');
+      if (savedDefaultOverage) {
+        setDefaultOveragePct(savedDefaultOverage);
+      }
+
+      const savedShowPricing = localStorage.getItem('showPricingColumns');
+      if (savedShowPricing) {
+        setShowPricingColumns(savedShowPricing === 'true');
       }
     }
 
-    const savedDataTables = localStorage.getItem('userDataTables');
-    if (savedDataTables) {
-      try {
-        setDataTables(JSON.parse(savedDataTables));
-      } catch (e) {}
-    }
-
-    const savedDynamicColumns = localStorage.getItem('userDynamicColumns');
-    if (savedDynamicColumns) {
-      try {
-        setDynamicColumns(JSON.parse(savedDynamicColumns));
-      } catch (e) {}
-    }
-
-    const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
-    setSavedJobs(jobs);
-    
-    const savedProjectTemplates = localStorage.getItem('projectTemplates');
-    if (savedProjectTemplates) {
-      setTemplates(JSON.parse(savedProjectTemplates));
-    }
-
-    const savedDefaultOverage = localStorage.getItem('defaultOveragePct');
-    if (savedDefaultOverage) {
-      setDefaultOveragePct(savedDefaultOverage);
-    }
-
-    const savedShowPricing = localStorage.getItem('showPricingColumns');
-    if (savedShowPricing) {
-      setShowPricingColumns(savedShowPricing === 'true');
-    }
-
-    // Check for auto-saved data
-    const autoSaved = localStorage.getItem('autoSavedProject');
-    if (autoSaved) {
-      try {
-        const parsed = JSON.parse(autoSaved);
-        if (parsed && parsed.lastAutoSave) {
-          setAutoSaveData(parsed);
-          setLastAutoSaveTime(new Date(parsed.lastAutoSave).toLocaleString());
-          setAutoSaveModalOpen(true);
-        }
-      } catch (e) {}
-    }
-
-    // Check for auto-saved templates
-    const autoSavedTemplates = localStorage.getItem('autoSavedTemplates');
-    if (autoSavedTemplates) {
-      try {
-        const parsed = JSON.parse(autoSavedTemplates);
-        if (parsed && parsed.lastAutoSave) {
-          setAutoSaveTemplatesData(parsed);
-          setLastTemplatesAutoSaveTime(new Date(parsed.lastAutoSave).toLocaleString());
-          setAutoSaveTemplatesModalOpen(true);
-        }
-      } catch (e) {}
-    }
-
     setCurrentJobId("JOB-" + Date.now());
-     
     setIsMounted(true);
-  }, []);
+  }, [user]);
+
+  // Debounced sync to Firestore for global settings
+  useEffect(() => {
+    if (!isMounted || !user) return;
+
+    const timeout = setTimeout(async () => {
+      const userDocRef = doc(db, 'users', user.uid);
+      try {
+        await setDoc(userDocRef, {
+          catalog,
+          clients,
+          formulaTemplates,
+          dataTables,
+          dynamicColumns,
+          projectTemplates: templates,
+          defaultOveragePct,
+          showPricingColumns,
+          lastUpdated: serverTimestamp()
+        }, { merge: true });
+      } catch (error) {
+        console.error("Error syncing to Firestore:", error);
+      }
+    }, 2000); // 2 second debounce
+
+    return () => clearTimeout(timeout);
+  }, [catalog, clients, formulaTemplates, dataTables, dynamicColumns, templates, defaultOveragePct, showPricingColumns, user, isMounted]);
 
   useEffect(() => {
     if (isMounted) {
@@ -1618,32 +1682,20 @@ export default function EstimatorApp() {
 
     if (user) {
       try {
-        const { error } = await supabase
-          .from('jobs')
-          .upsert({
-            id: currentJobId,
-            user_id: user.id,
-            project_name: projectName,
-            client_name: clientName,
-            job_notes: jobNotes,
-            takeoff_data: freshTakeoffData,
-            history: actionHistory,
-            last_saved: newJob.lastSaved,
-            custom_variables: customVariables,
-            dynamic_columns: dynamicColumns,
-            entity_data: entityData,
-            formula_templates: formulaTemplates,
-            data_tables: dataTables
-          });
-        if (error) throw error;
+        const jobDocRef = doc(db, 'users', user.uid, 'jobs', currentJobId);
+        await setDoc(jobDocRef, newJob, { merge: true });
+        alert("Job saved successfully to cloud!");
       } catch (err: any) {
-        console.error('Error saving to Supabase:', err.message);
+        console.error('Error saving to Firestore:', err.message);
+        alert("Error saving job to cloud: " + err.message);
       }
+    } else {
+      const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
+      setSavedJobs(newSavedJobs);
+      localStorage.setItem('savedEstimatingJobs', JSON.stringify(newSavedJobs));
+      alert("Job saved locally! Log in to sync with cloud.");
     }
-    const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
-    setSavedJobs(newSavedJobs);
-    localStorage.setItem('savedEstimatingJobs', JSON.stringify(newSavedJobs));
-    alert("Job Saved Successfully!");
+    setLastAutoSaveTime(new Date().toLocaleString());
   };
 
   const saveAsTemplate = async () => {
@@ -1675,95 +1727,25 @@ export default function EstimatorApp() {
 
     if (user) {
       try {
-        const { error } = await supabase
-          .from('templates')
-          .upsert({
-            id: newTemplate.id,
-            user_id: user.id,
-            name: templateName,
-            description: templateDesc,
-            type: newTemplate.type,
-            catalog: catalog,
-            takeoff_data: freshTakeoffData,
-            custom_variables: customVariables,
-            dynamic_columns: dynamicColumns,
-            entity_data: entityData,
-            formula_templates: formulaTemplates,
-            data_tables: dataTables,
-            default_overage_pct: defaultOveragePct,
-            job_notes: jobNotes,
-            created_at: newTemplate.createdAt
-          });
-        if (error) throw error;
+        const userDocRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userDocRef);
+        const currentTemplates = userDoc.exists() ? (userDoc.data().projectTemplates || []) : [];
+        await setDoc(userDocRef, {
+          projectTemplates: [...currentTemplates, newTemplate],
+          lastUpdated: serverTimestamp()
+        }, { merge: true });
+        alert("Template saved successfully to cloud!");
       } catch (err: any) {
-        console.error('Error saving template to Supabase:', err.message);
+        console.error('Error saving template to Firestore:', err.message);
+        alert("Error saving template to cloud: " + err.message);
       }
+    } else {
+      const newTemplates = [...templates, newTemplate];
+      setTemplates(newTemplates);
+      localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
+      alert("Template saved locally!");
     }
-
-    const newTemplates = [...templates, newTemplate];
-    setTemplates(newTemplates);
-    localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
-    alert("Template saved successfully!");
   };
-
-  useEffect(() => {
-    if (user) {
-      const fetchUserData = async () => {
-        // Fetch Jobs
-        const { data: jobs, error: jobsError } = await supabase
-          .from('jobs')
-          .select('*')
-          .eq('user_id', user.id);
-        
-        if (!jobsError && jobs) {
-          const formattedJobs: Record<string, Job> = {};
-          jobs.forEach(j => {
-            formattedJobs[j.id] = {
-              projectName: j.project_name,
-              clientName: j.client_name,
-              jobNotes: j.job_notes,
-              takeoffData: j.takeoff_data,
-              history: j.history,
-              lastSaved: j.last_saved,
-              customVariables: j.custom_variables,
-              dynamicColumns: j.dynamic_columns,
-              entityData: j.entity_data,
-              formulaTemplates: j.formula_templates,
-              dataTables: j.data_tables
-            };
-          });
-          setSavedJobs(prev => ({ ...prev, ...formattedJobs }));
-        }
-
-        // Fetch Templates
-        const { data: tpls, error: tplsError } = await supabase
-          .from('templates')
-          .select('*')
-          .or(`user_id.eq.${user.id},type.eq.global`);
-        
-        if (!tplsError && tpls) {
-          const formattedTpls: ProjectTemplate[] = tpls.map(t => ({
-            id: t.id,
-            name: t.name,
-            description: t.description,
-            type: t.type,
-            catalog: t.catalog,
-            takeoffData: t.takeoff_data,
-            customVariables: t.custom_variables,
-            dynamicColumns: t.dynamic_columns,
-            entityData: t.entity_data,
-            formulaTemplates: t.formula_templates,
-            dataTables: t.data_tables,
-            defaultOveragePct: t.default_overage_pct,
-            jobNotes: t.job_notes,
-            createdAt: t.created_at
-          }));
-          setTemplates(formattedTpls);
-        }
-      };
-      fetchUserData();
-    }
-  }, [user]);
 
   const createNewProject = () => {
     const newJobId = "JOB-" + Date.now();
@@ -1805,11 +1787,24 @@ export default function EstimatorApp() {
     setNewProjectModalOpen(false);
   };
 
-  const deleteTemplate = (id: string) => {
+  const deleteTemplate = async (id: string) => {
     if (!window.confirm("Are you sure you want to delete this template?")) return;
     const newTemplates = templates.filter(t => t.id !== id);
     setTemplates(newTemplates);
-    localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
+    
+    if (user) {
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        await setDoc(userDocRef, {
+          projectTemplates: newTemplates,
+          lastUpdated: serverTimestamp()
+        }, { merge: true });
+      } catch (error) {
+        console.error("Error deleting template from Firestore:", error);
+      }
+    } else {
+      localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
+    }
   };
 
   const loadTemplate = (id: string) => {
@@ -3501,22 +3496,31 @@ export default function EstimatorApp() {
                               >
                                 Edit
                               </button>
-                              <button 
-                                onClick={() => {
-                                  if (window.confirm(`Delete project "${job.projectName}"? This cannot be undone.`)) {
-                                    const newJobs = { ...savedJobs };
-                                    delete newJobs[id];
-                                    setSavedJobs(newJobs);
-                                    localStorage.setItem('savedEstimatingJobs', JSON.stringify(newJobs));
-                                    if (currentJobId === id) {
-                                      setCurrentJobId("");
+                                <button 
+                                  onClick={async () => {
+                                    if (window.confirm(`Delete project "${job.projectName}"? This cannot be undone.`)) {
+                                      if (user) {
+                                        try {
+                                          const jobDocRef = doc(db, 'users', user.uid, 'jobs', id);
+                                          await deleteDoc(jobDocRef);
+                                        } catch (error) {
+                                          console.error("Error deleting job from Firestore:", error);
+                                        }
+                                      } else {
+                                        const newJobs = { ...savedJobs };
+                                        delete newJobs[id];
+                                        setSavedJobs(newJobs);
+                                        localStorage.setItem('savedEstimatingJobs', JSON.stringify(newJobs));
+                                      }
+                                      if (currentJobId === id) {
+                                        setCurrentJobId("");
+                                      }
                                     }
-                                  }
-                                }}
-                                className="text-red-600 hover:text-red-800 text-xs font-bold px-2 py-1 bg-red-50 rounded"
-                              >
-                                Delete
-                              </button>
+                                  }}
+                                  className="text-red-600 hover:text-red-800 text-xs font-bold px-2 py-1 bg-red-50 rounded"
+                                >
+                                  Delete
+                                </button>
                             </td>
                           </>
                         )}

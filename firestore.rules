@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (UID)
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - catalog: array (optional)
+    //   - clients: array (optional)
+    //   - customVariables: array (optional)
+    //   - dynamicColumns: array (optional)
+    //   - dataTables: array (optional)
+    //   - projectTemplates: array (optional)
+    //   - defaultOveragePct: string (optional)
+    //   - showPricingColumns: bool (optional)
+    //   - lastUpdated: timestamp (optional)
+    //
+    // Subcollection: users/{userId}/jobs
+    // Document ID: jobId
+    // Fields:
+    //   - id: string (required)
+    //   - projectName: string (required)
+    //   - clientName: string (optional)
+    //   - jobNotes: string (optional)
+    //   - takeoffData: map (optional)
+    //   - history: array (optional)
+    //   - lastSaved: timestamp (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email']) &&
+             data.uid is string &&
+             data.email is string;
+    }
+
+    function isValidJob(data) {
+      return data.keys().hasAll(['id', 'projectName']) &&
+             data.id is string &&
+             data.projectName is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+      
+      match /jobs/{jobId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+  }
+}

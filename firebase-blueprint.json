@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and global settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "catalog": { "type": "array" },
+        "clients": { "type": "array" },
+        "customVariables": { "type": "array" },
+        "dynamicColumns": { "type": "array" },
+        "formulaTemplates": { "type": "array" },
+        "dataTables": { "type": "array" },
+        "projectTemplates": { "type": "array" },
+        "defaultOveragePct": { "type": "string" },
+        "showPricingColumns": { "type": "boolean" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Job": {
+      "title": "Job",
+      "description": "A saved estimating job/project",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "projectName": { "type": "string" },
+        "clientName": { "type": "string" },
+        "jobNotes": { "type": "string" },
+        "takeoffData": { "type": "object" },
+        "history": { "type": "array" },
+        "lastSaved": { "type": "string", "format": "date-time" },
+        "customVariables": { "type": "array" },
+        "dynamicColumns": { "type": "array" },
+        "entityData": { "type": "object" },
+        "formulaTemplates": { "type": "array" },
+        "dataTables": { "type": "array" }
+      },
+      "required": ["id", "projectName", "lastSaved"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Stores user profile and global settings"
+    },
+    "/users/{userId}/jobs/{jobId}": {
+      "schema": "Job",
+      "description": "Stores individual jobs for a user"
+    }
+  }
+}
