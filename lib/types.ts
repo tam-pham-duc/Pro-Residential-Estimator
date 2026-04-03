@@ -21,6 +21,7 @@ export type TakeoffItem = {
   evidence: string;
   qty_mode: 'auto' | 'manual';
   custom_formula: string;
+  unit_price?: string;
 };
 
 export type CustomVariable = {

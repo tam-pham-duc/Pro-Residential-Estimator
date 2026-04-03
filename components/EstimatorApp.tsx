@@ -341,6 +341,8 @@ export default function EstimatorApp() {
   const [dataTableModalOpen, setDataTableModalOpen] = useState(false);
   const [editingDataTable, setEditingDataTable] = useState<DataTable | null>(null);
 
+  const [showPricingColumns, setShowPricingColumns] = useState(false);
+
   const [bomExportModalOpen, setBomExportModalOpen] = useState(false);
   const [bomExportOptions, setBomExportOptions] = useState({
     includeSpec: true,
@@ -635,6 +637,11 @@ export default function EstimatorApp() {
       setDefaultOveragePct(savedDefaultOverage);
     }
 
+    const savedShowPricing = localStorage.getItem('showPricingColumns');
+    if (savedShowPricing) {
+      setShowPricingColumns(savedShowPricing === 'true');
+    }
+
     // Check for auto-saved data
     const autoSaved = localStorage.getItem('autoSavedProject');
     if (autoSaved) {
@@ -671,6 +678,12 @@ export default function EstimatorApp() {
       localStorage.setItem('userDynamicColumns', JSON.stringify(dynamicColumns));
     }
   }, [dynamicColumns, isMounted]);
+
+  useEffect(() => {
+    if (isMounted) {
+      localStorage.setItem('showPricingColumns', String(showPricingColumns));
+    }
+  }, [showPricingColumns, isMounted]);
 
   const autoMapVariables = useCallback((template: FormulaTemplate, item: Item | undefined) => {
     const mappings: Record<string, string> = {};
@@ -1216,7 +1229,7 @@ export default function EstimatorApp() {
       }
 
       let finalValue = value;
-      if (['qty', 'order_qty', 'overage_pct'].includes(field) && typeof value === 'string') {
+      if (['qty', 'order_qty', 'overage_pct', 'unit_price'].includes(field) && typeof value === 'string') {
         const evaluated = evaluateMath(value);
         if (evaluated !== "") finalValue = evaluated;
       }
@@ -1861,6 +1874,71 @@ export default function EstimatorApp() {
     event.target.value = '';
   };
 
+  const exportDataTables = () => {
+    const data = {
+      type: 'dataTables',
+      exportDate: new Date().toISOString(),
+      dataTables: dataTables
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `data_tables_${projectName.replace(/\s+/g, '_') || 'export'}_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const importDataTables = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const importedData = JSON.parse(e.target?.result as string);
+        if (importedData.type === 'dataTables' && Array.isArray(importedData.dataTables)) {
+          const newTables = importedData.dataTables;
+          
+          // Validate structure
+          const isValid = newTables.every((dt: any) => dt.name && Array.isArray(dt.columns) && Array.isArray(dt.rows));
+          if (!isValid) {
+            alert("Invalid data tables format.");
+            return;
+          }
+
+          if (window.confirm(`Import ${newTables.length} data tables? This will merge them with existing tables.`)) {
+            let updatedTables = [...dataTables];
+            newTables.forEach((nt: any) => {
+              const index = updatedTables.findIndex(t => t.name.toLowerCase() === nt.name.toLowerCase());
+              if (index !== -1) {
+                updatedTables[index] = { ...updatedTables[index], ...nt };
+              } else {
+                updatedTables.push({
+                  id: nt.id || "DT-" + Date.now() + Math.random(),
+                  ...nt
+                });
+              }
+            });
+
+            setDataTables(updatedTables);
+            localStorage.setItem('userDataTables', JSON.stringify(updatedTables));
+            recordHistory(`Imported data tables from JSON`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, updatedTables);
+            alert("Data tables imported successfully!");
+          }
+        } else {
+          alert("Invalid file type or format.");
+        }
+      } catch (e) {
+        alert("Error parsing JSON file.");
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = "";
+  };
+
   const openQtyPanel = (itemId: string) => {
     const data = takeoffData[itemId] || {};
     const formula = data.custom_formula || DEFAULT_QTY_FORMULA;
@@ -2286,6 +2364,17 @@ export default function EstimatorApp() {
                 <span className="absolute right-3 top-2.5 text-slate-400 font-bold">%</span>
               </div>
             </div>
+            <div className="w-full md:w-48 flex flex-col justify-end">
+              <label className="flex items-center gap-2 cursor-pointer p-2 bg-slate-50 rounded border border-slate-200 hover:bg-slate-100 transition-colors">
+                <input 
+                  type="checkbox" 
+                  checked={showPricingColumns}
+                  onChange={(e) => setShowPricingColumns(e.target.checked)}
+                  className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                />
+                <span className="text-xs font-bold text-slate-700 uppercase">Show Pricing</span>
+              </label>
+            </div>
           </div>
           <div>
             <label className="block text-xs font-bold text-blue-800 uppercase mb-1">Overall Job Notes / Specifications</label>
@@ -2635,6 +2724,23 @@ export default function EstimatorApp() {
                                           </div>
                                           <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(final to buy)</span>
                                         </th>
+                                        {showPricingColumns && (
+                                          <>
+                                            <th 
+                                              className="px-3 py-2 min-w-[100px] text-center font-bold whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
+                                              onClick={() => handleSort('unit_price')}
+                                            >
+                                              <div className="flex items-center justify-center gap-1">
+                                                <span>UNIT PRICE</span>
+                                                {sortConfig.key === 'unit_price' && (
+                                                  sortConfig.direction === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                                )}
+                                              </div>
+                                              <span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(cost per unit)</span>
+                                            </th>
+                                            <th className="px-3 py-2 min-w-[120px] font-bold whitespace-nowrap text-right">TOTAL PRICE<br/><span className="text-[10px] font-normal lowercase tracking-normal text-slate-500">(qty * price)</span></th>
+                                          </>
+                                        )}
                                         <th 
                                           className="px-3 py-2 text-center min-w-[90px] whitespace-nowrap cursor-pointer hover:bg-slate-200 transition-colors"
                                           onClick={() => handleSort('uom')}
@@ -2662,7 +2768,7 @@ export default function EstimatorApp() {
                                             if (['item_name', 'uom'].includes(sortConfig.key)) {
                                               valA = a[sortConfig.key as keyof Item] || '';
                                               valB = b[sortConfig.key as keyof Item] || '';
-                                            } else if (['spec', 'measured_qty', 'overage_pct', 'order_qty', 'qty'].includes(sortConfig.key)) {
+                                            } else if (['spec', 'measured_qty', 'overage_pct', 'order_qty', 'qty', 'unit_price'].includes(sortConfig.key)) {
                                               valA = takeoffData[a.item_id]?.[sortConfig.key as keyof TakeoffItem] || '';
                                               valB = takeoffData[b.item_id]?.[sortConfig.key as keyof TakeoffItem] || '';
                                             } else {
@@ -2856,6 +2962,33 @@ export default function EstimatorApp() {
                                                 )}
                                               </div>
                                             </td>
+                                            {showPricingColumns && (
+                                              <>
+                                                <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                                  <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Unit Price</span>
+                                                  <DebouncedInput 
+                                                    type="text" 
+                                                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
+                                                    placeholder="0.00" 
+                                                    value={rowData.unit_price || ""} 
+                                                    disabled={isDisabled} 
+                                                    onChange={(val) => updateTakeoffData(item.item_id, 'unit_price', String(val), item.calc_factor_instruction, item.item_name)} 
+                                                    onBlur={() => recordHistory(`Updated unit price for ${item.item_name}`)}
+                                                    onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
+                                                  />
+                                                </td>
+                                                <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
+                                                  <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Total Price</span>
+                                                  <div className="w-full border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-sm font-bold text-slate-700 text-right">
+                                                    {(() => {
+                                                      const up = parseFloat(rowData.unit_price || "0") || 0;
+                                                      const q = parseFloat(String(displayQty)) || 0;
+                                                      return (up * q).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+                                                    })()}
+                                                  </div>
+                                                </td>
+                                              </>
+                                            )}
                                             <td className="px-2 py-1 md:py-2 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                               <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">UOM</span>
                                               <select 
@@ -5061,7 +5194,22 @@ export default function EstimatorApp() {
         <div className="fixed inset-0 bg-slate-900 bg-opacity-60 flex justify-center items-center z-50">
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-5xl p-6 max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold">Manage Data Tables</h2>
+              <div className="flex items-center gap-4">
+                <h2 className="text-xl font-bold">Manage Data Tables</h2>
+                <div className="flex items-center gap-2 border-l pl-4">
+                  <button 
+                    onClick={exportDataTables}
+                    title="Export Tables to JSON"
+                    className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded transition"
+                  >
+                    <FileJson size={18} />
+                  </button>
+                  <label className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded transition cursor-pointer" title="Import Tables from JSON">
+                    <Upload size={18} />
+                    <input type="file" className="hidden" accept=".json" onChange={importDataTables} />
+                  </label>
+                </div>
+              </div>
               <button onClick={() => { setDataTableModalOpen(false); setEditingDataTable(null); }} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
             </div>
             
