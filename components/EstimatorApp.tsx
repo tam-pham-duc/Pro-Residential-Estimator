@@ -4,6 +4,8 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables, extractVariablesFromFormula } from '@/lib/estimator-utils';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable } from '@/lib/types';
+import { supabase } from '@/lib/supabase';
+import { User } from '@supabase/supabase-js';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
@@ -322,7 +324,56 @@ export default function EstimatorApp() {
     }
   }, [editingColumn]);
 
-  const allCategories = useMemo(() => getUniqueVals(catalog, 'category'), [catalog]);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError(null);
+
+    try {
+      if (authMode === 'signup') {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        alert('Check your email for the confirmation link!');
+        setAuthModalOpen(false);
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        setAuthModalOpen(false);
+      }
+    } catch (err: any) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+  };
+
+  const [allCategories, setAllCategories] = useState<string[]>([]);
+  useEffect(() => {
+    setAllCategories(getUniqueVals(catalog, 'category'));
+  }, [catalog]);
   const allSubCategories = useMemo(() => {
     if (!colScopeL1) return [];
     return getUniqueVals(catalog.filter(i => i.category === colScopeL1), 'sub_category');
@@ -340,6 +391,14 @@ export default function EstimatorApp() {
   const [dataTables, setDataTables] = useState<DataTable[]>([]);
   const [dataTableModalOpen, setDataTableModalOpen] = useState(false);
   const [editingDataTable, setEditingDataTable] = useState<DataTable | null>(null);
+
+  const [user, setUser] = useState<User | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const [showPricingColumns, setShowPricingColumns] = useState(false);
 
@@ -1535,7 +1594,7 @@ export default function EstimatorApp() {
     }
   };
 
-  const saveCurrentJob = () => {
+  const saveCurrentJob = async () => {
     if (!projectName) {
       alert("Please enter a Project Name before saving!");
       return;
@@ -1553,15 +1612,41 @@ export default function EstimatorApp() {
       customVariables,
       dynamicColumns,
       entityData,
-      formulaTemplates
+      formulaTemplates,
+      dataTables
     };
+
+    if (user) {
+      try {
+        const { error } = await supabase
+          .from('jobs')
+          .upsert({
+            id: currentJobId,
+            user_id: user.id,
+            project_name: projectName,
+            client_name: clientName,
+            job_notes: jobNotes,
+            takeoff_data: freshTakeoffData,
+            history: actionHistory,
+            last_saved: newJob.lastSaved,
+            custom_variables: customVariables,
+            dynamic_columns: dynamicColumns,
+            entity_data: entityData,
+            formula_templates: formulaTemplates,
+            data_tables: dataTables
+          });
+        if (error) throw error;
+      } catch (err: any) {
+        console.error('Error saving to Supabase:', err.message);
+      }
+    }
     const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
     setSavedJobs(newSavedJobs);
     localStorage.setItem('savedEstimatingJobs', JSON.stringify(newSavedJobs));
     alert("Job Saved Successfully!");
   };
 
-  const saveAsTemplate = () => {
+  const saveAsTemplate = async () => {
     const templateName = window.prompt("Enter template name:");
     if (!templateName) return;
     
@@ -1582,16 +1667,103 @@ export default function EstimatorApp() {
       dynamicColumns: dynamicColumns,
       entityData: entityData,
       formulaTemplates: formulaTemplates,
+      dataTables: dataTables,
       defaultOveragePct: defaultOveragePct,
       jobNotes: jobNotes,
       createdAt: new Date().toISOString()
     };
+
+    if (user) {
+      try {
+        const { error } = await supabase
+          .from('templates')
+          .upsert({
+            id: newTemplate.id,
+            user_id: user.id,
+            name: templateName,
+            description: templateDesc,
+            type: newTemplate.type,
+            catalog: catalog,
+            takeoff_data: freshTakeoffData,
+            custom_variables: customVariables,
+            dynamic_columns: dynamicColumns,
+            entity_data: entityData,
+            formula_templates: formulaTemplates,
+            data_tables: dataTables,
+            default_overage_pct: defaultOveragePct,
+            job_notes: jobNotes,
+            created_at: newTemplate.createdAt
+          });
+        if (error) throw error;
+      } catch (err: any) {
+        console.error('Error saving template to Supabase:', err.message);
+      }
+    }
 
     const newTemplates = [...templates, newTemplate];
     setTemplates(newTemplates);
     localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
     alert("Template saved successfully!");
   };
+
+  useEffect(() => {
+    if (user) {
+      const fetchUserData = async () => {
+        // Fetch Jobs
+        const { data: jobs, error: jobsError } = await supabase
+          .from('jobs')
+          .select('*')
+          .eq('user_id', user.id);
+        
+        if (!jobsError && jobs) {
+          const formattedJobs: Record<string, Job> = {};
+          jobs.forEach(j => {
+            formattedJobs[j.id] = {
+              projectName: j.project_name,
+              clientName: j.client_name,
+              jobNotes: j.job_notes,
+              takeoffData: j.takeoff_data,
+              history: j.history,
+              lastSaved: j.last_saved,
+              customVariables: j.custom_variables,
+              dynamicColumns: j.dynamic_columns,
+              entityData: j.entity_data,
+              formulaTemplates: j.formula_templates,
+              dataTables: j.data_tables
+            };
+          });
+          setSavedJobs(prev => ({ ...prev, ...formattedJobs }));
+        }
+
+        // Fetch Templates
+        const { data: tpls, error: tplsError } = await supabase
+          .from('templates')
+          .select('*')
+          .or(`user_id.eq.${user.id},type.eq.global`);
+        
+        if (!tplsError && tpls) {
+          const formattedTpls: ProjectTemplate[] = tpls.map(t => ({
+            id: t.id,
+            name: t.name,
+            description: t.description,
+            type: t.type,
+            catalog: t.catalog,
+            takeoffData: t.takeoff_data,
+            customVariables: t.custom_variables,
+            dynamicColumns: t.dynamic_columns,
+            entityData: t.entity_data,
+            formulaTemplates: t.formula_templates,
+            dataTables: t.data_tables,
+            defaultOveragePct: t.default_overage_pct,
+            jobNotes: t.job_notes,
+            createdAt: t.created_at
+          }));
+          setTemplates(formattedTpls);
+        }
+      };
+      fetchUserData();
+    }
+  }, [user]);
 
   const createNewProject = () => {
     const newJobId = "JOB-" + Date.now();
@@ -2185,6 +2357,18 @@ export default function EstimatorApp() {
             <Clock />
           </div>
           <div className="flex flex-wrap justify-center md:justify-end gap-3">
+            {user ? (
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-emerald-400 hidden sm:inline">{user.email}</span>
+                <button onClick={handleLogout} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => { setAuthMode('login'); setAuthModalOpen(true); }} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
+                Login / Register
+              </button>
+            )}
             <button onClick={() => openItemModal('add')} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
               <Plus size={16} /> Add Item
             </button>
@@ -5588,6 +5772,73 @@ export default function EstimatorApp() {
         </div>
       )}
 
+      {/* Auth Modal */}
+      {authModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+          >
+            <div className="bg-slate-800 p-6 text-white flex justify-between items-center">
+              <h2 className="text-xl font-bold">{authMode === 'login' ? 'Welcome Back' : 'Create Account'}</h2>
+              <button onClick={() => setAuthModalOpen(false)} className="text-slate-400 hover:text-white transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleAuth} className="p-8 space-y-6">
+              {authError && (
+                <div className="bg-red-50 border-l-4 border-red-500 p-4 text-red-700 text-sm font-medium">
+                  {authError}
+                </div>
+              )}
+              
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Email Address</label>
+                <input 
+                  type="email" 
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg p-3 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all"
+                  placeholder="you@example.com"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Password</label>
+                <input 
+                  type="password" 
+                  required
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg p-3 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all"
+                  placeholder="••••••••"
+                />
+              </div>
+              
+              <button 
+                type="submit" 
+                disabled={authLoading}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-400 text-white font-bold py-4 rounded-lg shadow-lg transition-all transform hover:-translate-y-0.5 active:translate-y-0"
+              >
+                {authLoading ? 'Processing...' : (authMode === 'login' ? 'Sign In' : 'Sign Up')}
+              </button>
+              
+              <div className="text-center">
+                <button 
+                  type="button"
+                  onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+                  className="text-sm font-bold text-emerald-600 hover:text-emerald-500 transition-colors"
+                >
+                  {authMode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
