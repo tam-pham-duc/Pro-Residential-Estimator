@@ -1,0 +1,204 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users/{userId}
+    // Fields:
+    //   - uid: string (required) - User's Firebase Auth UID
+    //   - displayName: string (optional) - User's display name
+    //   - email: string (required) - User's email address
+    //   - photoURL: string (optional) - User's photo URL
+    //   - projectName: string (optional) - Current project name
+    //   - clientName: string (optional) - Current client name
+    //   - clientEmail: string (optional) - Current client email
+    //   - clientPhone: string (optional) - Current client phone
+    //   - clientAddress: string (optional) - Current client address
+    //   - lastUpdated: string (optional) - ISO 8601 timestamp
+    //
+    // Collection: users/{userId}/catalog/{itemId}
+    // Fields:
+    //   - item_id: string (required) - Unique item ID
+    //   - category: string (required) - Item category
+    //   - sub_category: string (optional) - Item sub-category
+    //   - sub_item_1: string (optional) - Item group
+    //   - item_name: string (required) - Item name
+    //   - uom: string (required) - Unit of measure
+    //   - calc_factor_instruction: string (optional) - Calculation logic
+    //
+    // Collection: users/{userId}/takeoff/{itemId}
+    // Fields:
+    //   - itemId: string (required) - Reference to catalog item
+    //   - in_scope: bool (required) - Whether item is in scope
+    //   - spec: string (optional) - Item specification
+    //   - qty: string (optional) - Final quantity
+    //   - measured_qty: string (optional) - Calculated quantity
+    //   - overage_pct: string (optional) - Overage percentage
+    //   - order_qty: string (optional) - Order quantity
+    //   - evidence: string (optional) - Evidence/Note
+    //   - qty_mode: string (optional) - 'auto' or 'manual'
+    //   - custom_formula: string (optional) - Custom formula
+    //
+    // Collection: users/{userId}/variables/{variableId}
+    // Fields:
+    //   - id: string (required) - Unique variable ID
+    //   - name: string (required) - Variable name
+    //   - value: string (required) - Variable value
+    //   - unit: string (optional) - Variable unit
+    //   - description: string (optional) - Variable description
+    //
+    // Collection: users/{userId}/clients/{clientId}
+    // Fields:
+    //   - id: string (required) - Unique client ID
+    //   - name: string (required) - Client name
+    //   - email: string (optional) - Client email
+    //   - phone: string (optional) - Client phone
+    //   - address: string (optional) - Client address
+    //
+    // Collection: users/{userId}/templates/{templateId}
+    // Fields:
+    //   - id: string (required) - Unique template ID
+    //   - name: string (required) - Template name
+    //   - description: string (optional) - Template description
+    //   - catalog: list (optional) - List of catalog items
+    //   - takeoff: map (optional) - Takeoff data map
+    //   - variables: list (optional) - Custom variables list
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "dangkiem9466@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    function isValidOptionalString(field, maxLen) {
+      return !(field in request.resource.data) || (request.resource.data[field] is string && request.resource.data[field].size() <= maxLen);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUserProfile(data) {
+      return data.uid is string && data.uid.size() > 0 &&
+             data.email is string && isValidEmail(data.email) &&
+             isValidOptionalString('displayName', 100) &&
+             isValidOptionalString('projectName', 200) &&
+             isValidOptionalString('clientName', 100) &&
+             isValidOptionalString('clientEmail', 100) &&
+             isValidOptionalString('clientPhone', 50) &&
+             isValidOptionalString('clientAddress', 500);
+    }
+
+    function isValidCatalogItem(data) {
+      return data.item_id is string && data.item_id.size() > 0 &&
+             data.item_name is string && data.item_name.size() > 0 && data.item_name.size() < 200 &&
+             data.category is string && data.category.size() > 0 && data.category.size() < 100 &&
+             data.uom is string && data.uom.size() > 0 && data.uom.size() < 50;
+    }
+
+    function isValidTakeoffData(data) {
+      return data.itemId is string && data.itemId.size() > 0 &&
+             data.in_scope is bool &&
+             isValidOptionalString('spec', 500) &&
+             isValidOptionalString('qty', 100) &&
+             isValidOptionalString('measured_qty', 100) &&
+             isValidOptionalString('overage_pct', 50) &&
+             isValidOptionalString('order_qty', 100) &&
+             isValidOptionalString('evidence', 1000) &&
+             isValidOptionalString('qty_mode', 20) &&
+             isValidOptionalString('custom_formula', 1000);
+    }
+
+    function isValidCustomVariable(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.value is string && data.value.size() < 200;
+    }
+
+    function isValidClient(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidOptionalString('email', 100) &&
+             isValidOptionalString('phone', 50) &&
+             isValidOptionalString('address', 500);
+    }
+
+    function isValidTemplate(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidOptionalString('description', 500);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUserProfile(request.resource.data);
+      allow update: if (isOwner(userId) && isValidUserProfile(request.resource.data)) || isAdmin();
+      allow delete: if isAdmin();
+
+      match /catalog/{itemId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidCatalogItem(request.resource.data);
+      }
+
+      match /takeoff/{itemId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidTakeoffData(request.resource.data);
+      }
+
+      match /variables/{variableId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidCustomVariable(request.resource.data);
+      }
+
+      match /clients/{clientId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidClient(request.resource.data);
+      }
+
+      match /templates/{templateId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidTemplate(request.resource.data);
+      }
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

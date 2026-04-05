@@ -8,9 +8,11 @@ import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate,
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
-  Undo2, Redo2, Copy, Users, Folder, BookOpen, Palette
+  Undo2, Redo2, Copy, Users, Folder, BookOpen, Palette, LogIn, LogOut, User as UserIcon,
+  Key, Check, AlertCircle, Edit
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, db, doc, setDoc, getDoc, onSnapshot, collection, query, where, getDocs, deleteDoc, updateProfile, sendPasswordResetEmail, User } from '@/firebase';
+import { motion, AnimatePresence } from 'motion/react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
@@ -260,6 +262,9 @@ export default function EstimatorApp() {
   const [bulkQtyInput, setBulkQtyInput] = useState("");
   const [projectName, setProjectName] = useState("");
   const [clientName, setClientName] = useState("");
+  const [clientEmail, setClientEmail] = useState("");
+  const [clientPhone, setClientPhone] = useState("");
+  const [clientAddress, setClientAddress] = useState("");
   const [clients, setClients] = useState<Client[]>([]);
   const [clientModalOpen, setClientModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
@@ -298,6 +303,50 @@ export default function EstimatorApp() {
   const [templateScopeFilter, setTemplateScopeFilter] = useState<string>("all");
   
   const [mappingModalOpen, setMappingModalOpen] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [showAccountModal, setShowAccountModal] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [newDisplayName, setNewDisplayName] = useState("");
+  const [profileUpdateStatus, setProfileUpdateStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
+
+  // Initialize display name when modal opens
+  useEffect(() => {
+    if (showAccountModal && user) {
+      setNewDisplayName(user.displayName || "");
+      setProfileUpdateStatus(null);
+      setIsEditingProfile(false);
+    }
+  }, [showAccountModal, user]);
+
+  const handleUpdateProfile = async () => {
+    if (!user) return;
+    try {
+      await updateProfile(user, { displayName: newDisplayName });
+      // Update Firestore profile as well
+      await syncToFirestore('profile', user.uid, {
+        displayName: newDisplayName,
+        email: user.email,
+        photoURL: user.photoURL,
+        lastLogin: new Date().toISOString()
+      });
+      setProfileUpdateStatus({ type: 'success', message: 'Profile updated successfully!' });
+      setIsEditingProfile(false);
+    } catch (error) {
+      setProfileUpdateStatus({ type: 'error', message: 'Failed to update profile.' });
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!user || !user.email) return;
+    try {
+      await sendPasswordResetEmail(auth, user.email);
+      setProfileUpdateStatus({ type: 'success', message: 'Password reset email sent!' });
+    } catch (error) {
+      setProfileUpdateStatus({ type: 'error', message: 'Failed to send reset email.' });
+    }
+  };
+  const [isSyncing, setIsSyncing] = useState(false);
   const [templateToApply, setTemplateToApply] = useState<FormulaTemplate | null>(null);
   
   const [guideSearch, setGuideSearch] = useState("");
@@ -620,6 +669,168 @@ export default function EstimatorApp() {
 
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      // Optional: Clear local state or redirect
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+  };
+
+  const handleFirestoreError = (error: any, operation: string, path: string | null) => {
+    const errInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: auth.currentUser?.uid,
+        email: auth.currentUser?.email,
+        emailVerified: auth.currentUser?.emailVerified,
+        isAnonymous: auth.currentUser?.isAnonymous,
+        tenantId: auth.currentUser?.tenantId,
+        providerInfo: auth.currentUser?.providerData.map(provider => ({
+          providerId: provider.providerId,
+          displayName: provider.displayName,
+          email: provider.email,
+          photoUrl: provider.photoURL
+        })) || []
+      },
+      operationType: operation,
+      path
+    };
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+    // throw new Error(JSON.stringify(errInfo)); // Don't throw to avoid crashing the app, just log and maybe show a toast
+  };
+
+  // Sync to Firestore
+  useEffect(() => {
+    if (!user || !isAuthReady) return;
+
+    const syncUserDoc = async () => {
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        const userSnap = await getDoc(userRef);
+        
+        if (!userSnap.exists()) {
+          // Initial setup for new user
+          await setDoc(userRef, {
+            uid: user.uid,
+            email: user.email,
+            displayName: user.displayName,
+            photoURL: user.photoURL,
+            projectName,
+            clientName,
+            clientEmail,
+            clientPhone,
+            clientAddress,
+            lastUpdated: new Date().toISOString()
+          });
+          
+          // Upload current local data to Firestore
+          setIsSyncing(true);
+          // Catalog
+          for (const item of catalog) {
+            await setDoc(doc(db, 'users', user.uid, 'catalog', item.item_id), item);
+          }
+          // Takeoff
+          for (const [itemId, data] of Object.entries(takeoffData)) {
+            await setDoc(doc(db, 'users', user.uid, 'takeoff', itemId), { ...data, itemId });
+          }
+          // Variables
+          for (const variable of customVariables) {
+            await setDoc(doc(db, 'users', user.uid, 'variables', variable.id), variable);
+          }
+          // Clients
+          for (const client of clients) {
+            await setDoc(doc(db, 'users', user.uid, 'clients', client.id), client);
+          }
+          setIsSyncing(false);
+        } else {
+          // Load data from Firestore
+          const data = userSnap.data();
+          setProjectName(data.projectName || "");
+          setClientName(data.clientName || "");
+          setClientEmail(data.clientEmail || "");
+          setClientPhone(data.clientPhone || "");
+          setClientAddress(data.clientAddress || "");
+        }
+      } catch (error) {
+        handleFirestoreError(error, 'GET/SET', `users/${user.uid}`);
+      }
+    };
+
+    syncUserDoc();
+
+    // Listen for sub-collections
+    const unsubCatalog = onSnapshot(collection(db, 'users', user.uid, 'catalog'), (snap) => {
+      const newCatalog = snap.docs.map(d => d.data() as Item);
+      if (newCatalog.length > 0) setCatalog(newCatalog);
+    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/catalog`));
+
+    const unsubTakeoff = onSnapshot(collection(db, 'users', user.uid, 'takeoff'), (snap) => {
+      const newData: Record<string, TakeoffItem> = {};
+      snap.docs.forEach(d => {
+        const data = d.data();
+        newData[data.itemId] = data as TakeoffItem;
+      });
+      if (Object.keys(newData).length > 0) setTakeoffData(newData);
+    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/takeoff`));
+
+    const unsubVariables = onSnapshot(collection(db, 'users', user.uid, 'variables'), (snap) => {
+      const newVars = snap.docs.map(d => d.data() as CustomVariable);
+      if (newVars.length > 0) setCustomVariables(newVars);
+    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/variables`));
+
+    const unsubClients = onSnapshot(collection(db, 'users', user.uid, 'clients'), (snap) => {
+      const newClients = snap.docs.map(d => d.data() as Client);
+      if (newClients.length > 0) setClients(newClients);
+    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/clients`));
+
+    return () => {
+      unsubCatalog();
+      unsubTakeoff();
+      unsubVariables();
+      unsubClients();
+    };
+  }, [user, isAuthReady]);
+
+  // Auto-save to Firestore (Debounced)
+  useEffect(() => {
+    if (!user || !isMounted) return;
+    
+    const timer = setTimeout(async () => {
+      try {
+        await setDoc(doc(db, 'users', user.uid), {
+          projectName,
+          clientName,
+          clientEmail,
+          clientPhone,
+          clientAddress,
+          lastUpdated: new Date().toISOString()
+        }, { merge: true });
+      } catch (error) {
+        handleFirestoreError(error, 'UPDATE', `users/${user.uid}`);
+      }
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [user, projectName, clientName, clientEmail, clientPhone, clientAddress, isMounted]);
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' | null }>({ key: '', direction: null });
 
   const handleSort = (key: string) => {
@@ -1109,6 +1320,9 @@ export default function EstimatorApp() {
           sources.push('BuiltIn:Take-off');
           recalculateAffectedItems(sources);
           recordHistory(`Marked ${changedCount} items as ${inScope ? 'In Scope' : 'Out of Scope'}`, newData, catalog, projectName, clientName);
+          
+          // Sync to Firestore
+          updatedItemIds.forEach(id => syncToFirestore('takeoff', id, newData[id]));
         }, 0);
       }
       return newData;
@@ -1164,6 +1378,9 @@ export default function EstimatorApp() {
           sources.push('BuiltIn:Take-off');
           recalculateAffectedItems(sources);
           recordHistory(`Updated quantity to ${qty} for ${changedCount} items`, newData, catalog, projectName, clientName);
+          
+          // Sync to Firestore
+          updatedItemIds.forEach(id => syncToFirestore('takeoff', id, newData[id]));
         }, 0);
       }
       return newData;
@@ -1372,6 +1589,24 @@ export default function EstimatorApp() {
     }
   };
 
+  const syncToFirestore = async (collectionName: string, id: string, data: any) => {
+    if (!user) return;
+    try {
+      await setDoc(doc(db, 'users', user.uid, collectionName, id), { ...data, itemId: id, id: id });
+    } catch (error) {
+      handleFirestoreError(error, 'WRITE', `users/${user.uid}/${collectionName}/${id}`);
+    }
+  };
+
+  const removeFromFirestore = async (collectionName: string, id: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, collectionName, id));
+    } catch (error) {
+      handleFirestoreError(error, 'DELETE', `users/${user.uid}/${collectionName}/${id}`);
+    }
+  };
+
   const updateTakeoffData = (itemId: string, field: keyof TakeoffItem, value: any, instruction: string, itemName: string) => {
     setTakeoffData(prev => {
       const newData = { ...prev };
@@ -1417,6 +1652,10 @@ export default function EstimatorApp() {
       if (field === 'in_scope') {
         setTimeout(() => recordHistory(actionDesc, newData, catalog, projectName, clientName), 0);
       }
+      
+      // Sync to Firestore
+      syncToFirestore('takeoff', itemId, newData[itemId]);
+      
       return newData;
     });
   };
@@ -1758,6 +1997,9 @@ export default function EstimatorApp() {
     setTemplates(newTemplates);
     localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
     
+    // Sync to Firestore
+    syncToFirestore('templates', newTemplate.id, newTemplate);
+    
     // Reset form
     setNewTemplateName("");
     setNewTemplateDesc("");
@@ -1815,6 +2057,9 @@ export default function EstimatorApp() {
     const newTemplates = templates.filter(t => t.id !== id);
     setTemplates(newTemplates);
     localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
+    
+    // Sync to Firestore
+    removeFromFirestore('templates', id);
   };
 
   const loadTemplate = (id: string) => {
@@ -2412,6 +2657,7 @@ export default function EstimatorApp() {
     }
 
     let newCatalog = [...catalog];
+    let finalItemId = editingItemId;
     if (editingItemId) {
       const itemIndex = newCatalog.findIndex(i => i.item_id === editingItemId);
       if (itemIndex > -1) {
@@ -2420,12 +2666,18 @@ export default function EstimatorApp() {
         setTimeout(() => recordHistory(`Advanced Edit: ${oldName} -> ${name}`, takeoffData, newCatalog, projectName, clientName), 0);
       }
     } else {
-      const newItem: Item = { item_id: "ITM-" + Date.now(), category: cat, sub_category: subCat, sub_item_1: subItem1, item_name: name, uom: uom, calc_factor_instruction: rule, notes: notes };
+      finalItemId = "ITM-" + Date.now();
+      const newItem: Item = { item_id: finalItemId, category: cat, sub_category: subCat, sub_item_1: subItem1, item_name: name, uom: uom, calc_factor_instruction: rule, notes: notes };
       newCatalog.push(newItem);
       setTimeout(() => recordHistory(`Added New Item: ${name}`, takeoffData, newCatalog, projectName, clientName), 0);
     }
     setCatalog(newCatalog);
     localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
+    
+    // Sync to Firestore
+    const itemToSync = newCatalog.find(i => i.item_id === finalItemId);
+    if (itemToSync) syncToFirestore('catalog', finalItemId, itemToSync);
+    
     setItemModalOpen(false);
   };
 
@@ -2436,6 +2688,10 @@ export default function EstimatorApp() {
       setCatalog(newCatalog);
       localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
       
+      // Sync to Firestore
+      removeFromFirestore('catalog', editingItemId);
+      removeFromFirestore('takeoff', editingItemId);
+
       setTakeoffData(prev => {
         const newData = { ...prev };
         delete newData[editingItemId];
@@ -2502,7 +2758,46 @@ export default function EstimatorApp() {
             </h1>
             <Clock />
           </div>
-          <div className="flex flex-wrap justify-center md:justify-end gap-3">
+          <div className="flex flex-wrap justify-center md:justify-end gap-3 items-center">
+            {isAuthReady && (
+              <>
+                {user ? (
+                  <div className="flex items-center gap-3">
+                    <div className="flex flex-col items-end">
+                      <span className="text-xs font-bold text-emerald-400">Cloud Sync Active</span>
+                      <button 
+                        onClick={() => setShowAccountModal(true)}
+                        className="text-sm hover:text-emerald-400 flex items-center gap-2 transition"
+                      >
+                        {user.photoURL ? (
+                          <img src={user.photoURL} alt="User" className="w-8 h-8 rounded-full border-2 border-emerald-500" />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center border-2 border-emerald-500">
+                            <UserIcon size={16} />
+                          </div>
+                        )}
+                        <span className="hidden sm:inline">{user.displayName || user.email}</span>
+                      </button>
+                    </div>
+                    <button 
+                      onClick={handleLogout}
+                      className="bg-slate-700 hover:bg-slate-600 p-2 rounded text-sm font-bold shadow-sm transition"
+                      title="Logout"
+                    >
+                      <LogOut size={18} />
+                    </button>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={handleLogin}
+                    className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-2 transition"
+                  >
+                    <LogIn size={16} /> Login with Google
+                  </button>
+                )}
+              </>
+            )}
+            <div className="h-8 w-px bg-slate-600 mx-1 hidden md:block"></div>
             <button onClick={() => openItemModal('add')} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
               <Plus size={16} /> Add Item
             </button>
@@ -3458,6 +3753,9 @@ export default function EstimatorApp() {
                   setClients(newClients);
                   localStorage.setItem('userClients', JSON.stringify(newClients));
                   
+                  // Sync to Firestore
+                  newClients.forEach(c => syncToFirestore('clients', c.id, c));
+                  
                   form.reset();
                   setEditingClient(null);
                 }}
@@ -3583,6 +3881,10 @@ export default function EstimatorApp() {
                                   const newClients = clients.filter(col => col.id !== c.id);
                                   setClients(newClients);
                                   localStorage.setItem('userClients', JSON.stringify(newClients));
+                                  
+                                  // Sync to Firestore
+                                  removeFromFirestore('clients', c.id);
+                                  
                                   if (editingClient?.id === c.id) setEditingClient(null);
                                   if (clientName === c.name) setClientName("");
                                 }
@@ -4730,6 +5032,9 @@ export default function EstimatorApp() {
                       setCustomVariables(updatedVars);
                       recordHistory(editingCustomVar ? `Updated variable ${name}` : `Added variable ${name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, updatedVars, jobNotes, dynamicColumns, entityData);
                       
+                      // Sync to Firestore
+                      updatedVars.forEach(v => syncToFirestore('variables', v.id, v));
+                      
                       // Reset form
                       nameInput.value = '';
                       setCvFormula('');
@@ -4794,6 +5099,10 @@ export default function EstimatorApp() {
                                   
                                   setCustomVariables(updatedVars);
                                   recordHistory(`Deleted variable ${v.name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, updatedVars, jobNotes, dynamicColumns, entityData);
+                                  
+                                  // Sync to Firestore
+                                  removeFromFirestore('variables', v.id);
+                                  
                                   if (editingCustomVar?.id === v.id) setEditingCustomVar(null);
                                 }
                               }}
@@ -6400,6 +6709,147 @@ export default function EstimatorApp() {
       )}
 
       {/* Auto-save Templates Modal removed for local mode */}
+      {/* Account Management Modal */}
+      <AnimatePresence>
+        {showAccountModal && user && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="bg-slate-800 p-6 text-white relative">
+                <button 
+                  onClick={() => setShowAccountModal(false)}
+                  className="absolute top-4 right-4 text-slate-400 hover:text-white transition"
+                >
+                  <X size={20} />
+                </button>
+                <div className="flex flex-col items-center">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="Profile" className="w-20 h-20 rounded-full border-4 border-emerald-500 mb-3 shadow-lg" />
+                  ) : (
+                    <div className="w-20 h-20 rounded-full bg-emerald-600 flex items-center justify-center border-4 border-emerald-500 mb-3 shadow-lg">
+                      <UserIcon size={40} />
+                    </div>
+                  )}
+                  
+                  {isEditingProfile ? (
+                    <div className="flex flex-col items-center gap-2 w-full max-w-[200px]">
+                      <input 
+                        type="text" 
+                        value={newDisplayName}
+                        onChange={(e) => setNewDisplayName(e.target.value)}
+                        className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-center focus:outline-none focus:border-emerald-500"
+                        placeholder="Display Name"
+                      />
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={handleUpdateProfile}
+                          className="text-[10px] bg-emerald-600 hover:bg-emerald-500 px-2 py-1 rounded font-bold"
+                        >
+                          Save
+                        </button>
+                        <button 
+                          onClick={() => setIsEditingProfile(false)}
+                          className="text-[10px] bg-slate-600 hover:bg-slate-500 px-2 py-1 rounded font-bold"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-xl font-bold">{user.displayName || "User Profile"}</h2>
+                        <button 
+                          onClick={() => setIsEditingProfile(true)}
+                          className="text-slate-400 hover:text-white transition"
+                          title="Edit Name"
+                        >
+                          <Edit size={14} />
+                        </button>
+                      </div>
+                      <p className="text-slate-400 text-sm">{user.email}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-6 space-y-6">
+                {profileUpdateStatus && (
+                  <div className={`p-3 rounded-lg text-xs font-bold flex items-center gap-2 ${
+                    profileUpdateStatus.type === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                  }`}>
+                    {profileUpdateStatus.type === 'success' ? <Check size={14} /> : <AlertCircle size={14} />}
+                    {profileUpdateStatus.message}
+                  </div>
+                )}
+                
+                <div className="space-y-4">
+                  <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Account Information</h3>
+                  <div className="bg-slate-50 p-4 rounded-xl border space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-slate-500">Provider</span>
+                      <span className="text-sm font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded">Google</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-slate-500">User ID</span>
+                      <span className="text-xs font-mono text-slate-400 truncate max-w-[150px]">{user.uid}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-slate-500">Email Verified</span>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded ${user.emailVerified ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {user.emailVerified ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Cloud Storage</h3>
+                  <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 flex items-center gap-4">
+                    <div className="p-3 bg-emerald-100 rounded-full text-emerald-600">
+                      <Save size={20} />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-bold text-emerald-800">Auto-Sync Enabled</p>
+                      <p className="text-xs text-emerald-600">Your data is securely stored in Firestore and synced across devices.</p>
+                    </div>
+                  </div>
+                  
+                  <button 
+                    onClick={handlePasswordReset}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 text-sm font-bold transition"
+                  >
+                    <Key size={16} /> Send Password Reset Email
+                  </button>
+                </div>
+
+                <div className="pt-4 border-t flex gap-3">
+                  <button 
+                    onClick={handleLogout}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 font-bold transition"
+                  >
+                    <LogOut size={18} /> Sign Out
+                  </button>
+                  <button 
+                    onClick={() => setShowAccountModal(false)}
+                    className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 font-bold shadow-md transition"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              
+              <div className="bg-slate-50 p-4 text-center border-t">
+                <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Pro Residential Estimator v2.5</p>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

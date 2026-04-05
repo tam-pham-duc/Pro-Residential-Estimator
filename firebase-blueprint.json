@@ -1,0 +1,121 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Stores user preferences and current project metadata.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "projectName": { "type": "string" },
+        "clientName": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "clientAddress": { "type": "string" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "CatalogItem": {
+      "title": "Catalog Item",
+      "description": "A single material item in the user's catalog.",
+      "type": "object",
+      "properties": {
+        "item_id": { "type": "string" },
+        "category": { "type": "string" },
+        "sub_category": { "type": "string" },
+        "sub_item_1": { "type": "string" },
+        "item_name": { "type": "string" },
+        "uom": { "type": "string" },
+        "calc_factor_instruction": { "type": "string" }
+      },
+      "required": ["item_id", "item_name"]
+    },
+    "TakeoffData": {
+      "title": "Takeoff Data",
+      "description": "The current state of an item in the project (qty, scope, etc).",
+      "type": "object",
+      "properties": {
+        "itemId": { "type": "string" },
+        "in_scope": { "type": "boolean" },
+        "spec": { "type": "string" },
+        "qty": { "type": "string" },
+        "measured_qty": { "type": "string" },
+        "overage_pct": { "type": "string" },
+        "order_qty": { "type": "string" },
+        "evidence": { "type": "string" },
+        "qty_mode": { "type": "string", "enum": ["auto", "manual"] },
+        "custom_formula": { "type": "string" }
+      },
+      "required": ["itemId"]
+    },
+    "CustomVariable": {
+      "title": "Custom Variable",
+      "description": "A user-defined variable for calculations.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "value": { "type": "string" },
+        "unit": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["id", "name", "value"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "A saved client profile.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Template": {
+      "title": "Template",
+      "description": "A saved project template.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "catalog": { "type": "array", "items": { "$ref": "CatalogItem" } },
+        "takeoff": { "type": "object" },
+        "variables": { "type": "array", "items": { "$ref": "CustomVariable" } }
+      },
+      "required": ["id", "name"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile and project metadata."
+    },
+    "/users/{userId}/catalog/{itemId}": {
+      "schema": "CatalogItem",
+      "description": "User's custom material catalog."
+    },
+    "/users/{userId}/takeoff/{itemId}": {
+      "schema": "TakeoffData",
+      "description": "Project takeoff data for each item."
+    },
+    "/users/{userId}/variables/{variableId}": {
+      "schema": "CustomVariable",
+      "description": "User's custom calculation variables."
+    },
+    "/users/{userId}/clients/{clientId}": {
+      "schema": "Client",
+      "description": "Saved client list."
+    },
+    "/users/{userId}/templates/{templateId}": {
+      "schema": "Template",
+      "description": "Saved project templates."
+    }
+  }
+}
