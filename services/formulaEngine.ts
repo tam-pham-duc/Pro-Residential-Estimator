@@ -99,13 +99,25 @@ export function parseFormula(formula: string): string {
   return parsedFormula;
 }
 
-export function evaluateFormula(formula: string, context: Record<string, any>) {
+export function evaluateFormula(formula: string, context: Record<string, any>, debug: boolean = false) {
   if (!formula) return 0;
   
   try {
     const parsedFormula = parseFormula(formula);
     const args = Object.keys(context);
     const values = Object.values(context);
+
+    // Check if debug is enabled globally or via parameter
+    const isDebugEnabled = debug || (typeof window !== 'undefined' && (window as any).DEBUG_FORMULA === true) || (typeof window !== 'undefined' && window.localStorage?.getItem('DEBUG_FORMULA') === 'true');
+
+    if (isDebugEnabled) {
+      console.group(`[Formula Engine Debug] Evaluating: ${formula}`);
+      console.log("Original Formula:", formula);
+      console.log("Parsed Formula:", parsedFormula);
+      console.log("Parsed Variables (Args):", args);
+      console.log("Context Object:", { ...context });
+      console.groupEnd();
+    }
 
     // Create a safe function
     const fn = new Function(...args, `return ${parsedFormula};`);
