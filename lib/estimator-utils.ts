@@ -76,8 +76,9 @@ export function evaluateCustomFormula(
   overagePct: string | number,
   orderQty: string | number,
   customVariables: CustomVariable[],
-  dynamicScope: Record<string, any> = {}
-): number {
+  dynamicScope: Record<string, any> = {},
+  dataTables: any[] = []
+): number | string {
   if (!formula) return 0;
   
   try {
@@ -100,11 +101,35 @@ export function evaluateCustomFormula(
     
     // 4. Handle common math functions (mathjs handles most of these natively if they are lowercase or we map them)
     // We can just evaluate it with mathjs
-    const result = math.evaluate(processedFormula.toLowerCase());
+    const scope = {
+      lookup: (tableName: string, searchCol: string, searchVal: any, resultCol: string) => {
+        const table = dataTables.find(t => t.name === tableName);
+        if (!table) throw new Error(`Table not found: ${tableName}`);
+        const row = table.rows.find((r: any) => String(r[searchCol]) === String(searchVal));
+        if (!row) throw new Error(`Value not found in table: ${searchVal}`);
+        const result = row[resultCol];
+        if (result === undefined) throw new Error(`Column not found: ${resultCol}`);
+        return Number(result) || result;
+      },
+      roundup: (val: number, decimals: number = 0) => {
+        const multiplier = Math.pow(10, decimals);
+        return Math.ceil(val * multiplier) / multiplier;
+      },
+      rounddown: (val: number, decimals: number = 0) => {
+        const multiplier = Math.pow(10, decimals);
+        return Math.floor(val * multiplier) / multiplier;
+      },
+      if: (condition: any, trueVal: any, falseVal: any) => condition ? trueVal : falseVal,
+      and: (...args: any[]) => args.every(Boolean),
+      or: (...args: any[]) => args.some(Boolean),
+      not: (val: any) => !val,
+    };
+    
+    const result = math.evaluate(processedFormula.toLowerCase(), scope);
     return typeof result === 'number' ? result : 0;
-  } catch (e) {
+  } catch (e: any) {
     console.error("Formula evaluation error:", e);
-    return 0;
+    return "ERR: " + e.message;
   }
 }
 
@@ -112,7 +137,8 @@ export function validateCustomFormula(
   formula: string,
   customVariables: CustomVariable[],
   dynamicScope: Record<string, any> = {},
-  variableRegistry: any = {}
+  variableRegistry: any = {},
+  dataTables: any[] = []
 ): { isValid: boolean; error?: string } {
   if (!formula) return { isValid: true };
   
@@ -137,7 +163,17 @@ export function validateCustomFormula(
       testFormula = testFormula.replace(new RegExp(`\\[${v}\\]`, 'g'), "1");
     });
     
-    math.evaluate(testFormula.toLowerCase());
+    const scope = {
+      lookup: (tableName: string, searchCol: string, searchVal: any, resultCol: string) => 1,
+      roundup: (val: number, decimals: number = 0) => 1,
+      rounddown: (val: number, decimals: number = 0) => 1,
+      if: (condition: any, trueVal: any, falseVal: any) => 1,
+      and: (...args: any[]) => true,
+      or: (...args: any[]) => true,
+      not: (val: any) => false,
+    };
+    
+    math.evaluate(testFormula.toLowerCase(), scope);
     return { isValid: true };
   } catch (e: any) {
     return { isValid: false, error: e.message };

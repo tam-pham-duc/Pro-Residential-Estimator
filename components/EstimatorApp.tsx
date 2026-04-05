@@ -3,14 +3,11 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables, extractVariablesFromFormula } from '@/lib/estimator-utils';
-import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable } from '@/lib/types';
-import { auth, db } from '@/lib/firebase';
-import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, onSnapshot, query, where, deleteDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable, ConditionalFormatRule } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
-  Undo2, Redo2, Copy, Users, Folder, BookOpen
+  Undo2, Redo2, Copy, Users, Folder, BookOpen, Palette
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
@@ -253,7 +250,7 @@ function DebouncedInput({
 
 export default function EstimatorApp() {
   const [isMounted, setIsMounted] = useState(false);
-  const [catalog, setCatalog] = useState<Item[]>([]);
+  const [catalog, setCatalog] = useState<Item[]>(defaultCatalog);
   const [takeoffData, setTakeoffData] = useState<Record<string, TakeoffItem>>({});
   const [actionHistory, setActionHistory] = useState<HistoryRecord[]>([]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -270,6 +267,10 @@ export default function EstimatorApp() {
   const [currentJobId, setCurrentJobId] = useState("");
   const [savedJobs, setSavedJobs] = useState<Record<string, Job>>({});
   const [defaultOveragePct, setDefaultOveragePct] = useState<string>("0");
+  const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
+  const [dataTables, setDataTables] = useState<DataTable[]>([]);
+  const [conditionalFormatRules, setConditionalFormatRules] = useState<ConditionalFormatRule[]>([]);
+  const [showPricingColumns, setShowPricingColumns] = useState(true);
 
   // Modals state
   const [qtyPanelOpen, setQtyPanelOpen] = useState(false);
@@ -283,6 +284,8 @@ export default function EstimatorApp() {
   const [formulaTemplates, setFormulaTemplates] = useState<FormulaTemplate[]>([]);
   const [formulaTemplateModalOpen, setFormulaTemplateModalOpen] = useState(false);
   const [editingFormulaTemplate, setEditingFormulaTemplate] = useState<FormulaTemplate | null>(null);
+  const [ftFormula, setFtFormula] = useState("");
+  const [cvFormula, setCvFormula] = useState("");
   const [templateSearch, setTemplateSearch] = useState("");
   const [templateScopeFilter, setTemplateScopeFilter] = useState<string>("all");
   
@@ -294,6 +297,7 @@ export default function EstimatorApp() {
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
 
   const [dynamicColumnsModalOpen, setDynamicColumnsModalOpen] = useState(false);
+  const [conditionalFormatModalOpen, setConditionalFormatModalOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<DynamicColumn | null>(null);
   const [colScopeL1, setColScopeL1] = useState("");
   const [colScopeL2, setColScopeL2] = useState("");
@@ -325,129 +329,32 @@ export default function EstimatorApp() {
     }
   }, [editingColumn]);
 
-  const migrateLocalStorageToFirestore = useCallback(async (uid: string) => {
-    const userDocRef = doc(db, 'users', uid);
+  useEffect(() => {
+    setIsMounted(true);
     
+    // Load local data
     const catalogData = localStorage.getItem('userItemCatalog');
     const clientsData = localStorage.getItem('userClients');
     const formulaTemplatesData = localStorage.getItem('formulaTemplates');
     const dataTablesData = localStorage.getItem('userDataTables');
     const dynamicColumnsData = localStorage.getItem('userDynamicColumns');
     const projectTemplatesData = localStorage.getItem('projectTemplates');
+    const savedJobsData = localStorage.getItem('savedEstimatingJobs');
     const defaultOverage = localStorage.getItem('defaultOveragePct');
     const showPricing = localStorage.getItem('showPricingColumns');
 
-    const userData: any = {
-      uid,
-      email: auth.currentUser?.email,
-      lastUpdated: serverTimestamp(),
-    };
+    if (catalogData) setCatalog(JSON.parse(catalogData));
+    if (clientsData) setClients(JSON.parse(clientsData));
+    if (formulaTemplatesData) setFormulaTemplates(JSON.parse(formulaTemplatesData));
+    if (dataTablesData) setDataTables(JSON.parse(dataTablesData));
+    if (dynamicColumnsData) setDynamicColumns(JSON.parse(dynamicColumnsData));
+    if (projectTemplatesData) setTemplates(JSON.parse(projectTemplatesData));
+    if (savedJobsData) setSavedJobs(JSON.parse(savedJobsData));
+    if (defaultOverage) setDefaultOveragePct(defaultOverage);
+    if (showPricing) setShowPricingColumns(showPricing === 'true');
 
-    if (catalogData) userData.catalog = JSON.parse(catalogData);
-    if (clientsData) userData.clients = JSON.parse(clientsData);
-    if (formulaTemplatesData) userData.formulaTemplates = JSON.parse(formulaTemplatesData);
-    if (dataTablesData) userData.dataTables = JSON.parse(dataTablesData);
-    if (dynamicColumnsData) userData.dynamicColumns = JSON.parse(dynamicColumnsData);
-    if (projectTemplatesData) userData.projectTemplates = JSON.parse(projectTemplatesData);
-    if (defaultOverage) userData.defaultOveragePct = defaultOverage;
-    if (showPricing) userData.showPricingColumns = showPricing === 'true';
-
-    await setDoc(userDocRef, userData, { merge: true });
-
-    // Migrate jobs
-    const savedJobsLocal = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
-    for (const jobId in savedJobsLocal) {
-      const jobDocRef = doc(db, 'users', uid, 'jobs', jobId);
-      await setDoc(jobDocRef, { ...savedJobsLocal[jobId], id: jobId }, { merge: true });
-    }
+    setCurrentJobId("JOB-" + Date.now());
   }, []);
-
-  const syncUserData = useCallback(async (uid: string) => {
-    const userDocRef = doc(db, 'users', uid);
-    
-    // Listen for real-time updates to global settings
-    const unsubUser = onSnapshot(userDocRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.catalog) setCatalog(data.catalog);
-        if (data.clients) setClients(data.clients);
-        if (data.formulaTemplates) setFormulaTemplates(data.formulaTemplates);
-        if (data.dataTables) setDataTables(data.dataTables);
-        if (data.dynamicColumns) setDynamicColumns(data.dynamicColumns);
-        if (data.projectTemplates) setTemplates(data.projectTemplates);
-        if (data.defaultOveragePct) setDefaultOveragePct(data.defaultOveragePct);
-        if (data.showPricingColumns !== undefined) setShowPricingColumns(data.showPricingColumns);
-      } else {
-        // First time login: migrate from localStorage if available
-        migrateLocalStorageToFirestore(uid);
-      }
-    }, (error) => {
-      console.error("Firestore Error (User Settings):", error);
-    });
-
-    // Listen for real-time updates to jobs
-    const jobsQuery = collection(db, 'users', uid, 'jobs');
-    const unsubJobs = onSnapshot(jobsQuery, (snapshot) => {
-      const jobs: Record<string, Job> = {};
-      snapshot.forEach((doc) => {
-        jobs[doc.id] = doc.data() as Job;
-      });
-      setSavedJobs(jobs);
-    }, (error) => {
-      console.error("Firestore Error (Jobs):", error);
-    });
-
-    return () => {
-      unsubUser();
-      unsubJobs();
-    };
-  }, [migrateLocalStorageToFirestore]);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      if (user) {
-        // Load user data from Firestore
-        syncUserData(user.uid);
-      } else {
-        // Reset state when logged out
-        setCatalog(defaultCatalog);
-        setClients([]);
-        setFormulaTemplates([]);
-        setDataTables([]);
-        setDynamicColumns([]);
-        setTemplates([]);
-        setSavedJobs({});
-      }
-    });
-
-    return () => unsubscribe();
-  }, [syncUserData]);
-
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setAuthError(null);
-
-    try {
-      if (authMode === 'signup') {
-        await createUserWithEmailAndPassword(auth, authEmail, authPassword);
-        setAuthModalOpen(false);
-      } else {
-        await signInWithEmailAndPassword(auth, authEmail, authPassword);
-        setAuthModalOpen(false);
-      }
-    } catch (err: any) {
-      setAuthError(err.message);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    await signOut(auth);
-    setUser(null);
-  };
 
   const [allCategories, setAllCategories] = useState<string[]>([]);
   useEffect(() => {
@@ -467,19 +374,8 @@ export default function EstimatorApp() {
     return getUniqueVals(catalog.filter(i => i.category === colScopeL1 && i.sub_category === colScopeL2 && i.sub_item_1 === colScopeL3), 'item_name');
   }, [catalog, colScopeL1, colScopeL2, colScopeL3]);
 
-  const [dataTables, setDataTables] = useState<DataTable[]>([]);
   const [dataTableModalOpen, setDataTableModalOpen] = useState(false);
   const [editingDataTable, setEditingDataTable] = useState<DataTable | null>(null);
-
-  const [user, setUser] = useState<User | null>(null);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-
-  const [showPricingColumns, setShowPricingColumns] = useState(false);
 
   const [bomExportModalOpen, setBomExportModalOpen] = useState(false);
   const [bomExportOptions, setBomExportOptions] = useState({
@@ -646,7 +542,7 @@ export default function EstimatorApp() {
     // If basic structure is okay, check evaluate
     if (diagnostics.length === 0) {
       const item = catalog.find(i => i.item_id === qtyPanelItemId);
-      const validation = validateCustomFormula(doc, customVariables, resolveDynamicScope(item), variableRegistry);
+      const validation = validateCustomFormula(doc, customVariables, resolveDynamicScope(item), variableRegistry, dataTables);
       if (!validation.isValid) {
         diagnostics.push({
           from: 0,
@@ -658,7 +554,7 @@ export default function EstimatorApp() {
     }
 
     return diagnostics;
-  }), [customVariables, catalog, qtyPanelItemId, resolveDynamicScope, variableRegistry]);
+  }), [customVariables, catalog, qtyPanelItemId, resolveDynamicScope, variableRegistry, dataTables]);
 
   const [itemModalOpen, setItemModalOpen] = useState(false);
   const [itemModalMode, setItemModalMode] = useState<'add' | 'edit'>('add');
@@ -690,7 +586,6 @@ export default function EstimatorApp() {
     setSortConfig({ key, direction });
   };
 
-  const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [newProjectModalOpen, setNewProjectModalOpen] = useState(false);
   const [newProjectData, setNewProjectData] = useState({ name: '', client: '', description: '', templateId: '' });
@@ -708,92 +603,6 @@ export default function EstimatorApp() {
   useEffect(() => {
     historyIndexRef.current = historyIndex;
   }, [historyIndex]);
-
-  useEffect(() => {
-    if (!user) {
-      const savedCatalog = localStorage.getItem('userItemCatalog');
-      if (savedCatalog) {
-        setCatalog(JSON.parse(savedCatalog));
-      } else {
-        setCatalog(defaultCatalog);
-      }
-
-      const savedClients = localStorage.getItem('userClients');
-      if (savedClients) {
-        try {
-          setClients(JSON.parse(savedClients));
-        } catch (e) {}
-      }
-
-      const savedFormulaTemplates = localStorage.getItem('formulaTemplates');
-      if (savedFormulaTemplates) {
-        try {
-          setFormulaTemplates(JSON.parse(savedFormulaTemplates));
-        } catch (e) {}
-      }
-
-      const savedDataTables = localStorage.getItem('userDataTables');
-      if (savedDataTables) {
-        try {
-          setDataTables(JSON.parse(savedDataTables));
-        } catch (e) {}
-      }
-
-      const savedDynamicColumns = localStorage.getItem('userDynamicColumns');
-      if (savedDynamicColumns) {
-        try {
-          setDynamicColumns(JSON.parse(savedDynamicColumns));
-        } catch (e) {}
-      }
-
-      const jobs = JSON.parse(localStorage.getItem('savedEstimatingJobs') || '{}');
-      setSavedJobs(jobs);
-      
-      const savedProjectTemplates = localStorage.getItem('projectTemplates');
-      if (savedProjectTemplates) {
-        setTemplates(JSON.parse(savedProjectTemplates));
-      }
-
-      const savedDefaultOverage = localStorage.getItem('defaultOveragePct');
-      if (savedDefaultOverage) {
-        setDefaultOveragePct(savedDefaultOverage);
-      }
-
-      const savedShowPricing = localStorage.getItem('showPricingColumns');
-      if (savedShowPricing) {
-        setShowPricingColumns(savedShowPricing === 'true');
-      }
-    }
-
-    setCurrentJobId("JOB-" + Date.now());
-    setIsMounted(true);
-  }, [user]);
-
-  // Debounced sync to Firestore for global settings
-  useEffect(() => {
-    if (!isMounted || !user) return;
-
-    const timeout = setTimeout(async () => {
-      const userDocRef = doc(db, 'users', user.uid);
-      try {
-        await setDoc(userDocRef, {
-          catalog,
-          clients,
-          formulaTemplates,
-          dataTables,
-          dynamicColumns,
-          projectTemplates: templates,
-          defaultOveragePct,
-          showPricingColumns,
-          lastUpdated: serverTimestamp()
-        }, { merge: true });
-      } catch (error) {
-        console.error("Error syncing to Firestore:", error);
-      }
-    }, 2000); // 2 second debounce
-
-    return () => clearTimeout(timeout);
-  }, [catalog, clients, formulaTemplates, dataTables, dynamicColumns, templates, defaultOveragePct, showPricingColumns, user, isMounted]);
 
   useEffect(() => {
     if (isMounted) {
@@ -923,7 +732,7 @@ export default function EstimatorApp() {
     }
   }, [formulaTemplates, templates, isMounted, autoSaveTemplates]);
 
-  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaTemplates = formulaTemplates, newDataTables = dataTables) => {
+  const recordHistory = (actionDescription: string, newData = takeoffData, newCatalog = catalog, newProj = projectName, newClient = clientName, newCustomVars = customVariables, newNotes = jobNotes, newDynamicColumns = dynamicColumns, newEntityData = entityData, newFormulaTemplates = formulaTemplates, newDataTables = dataTables, newConditionalFormatRules = conditionalFormatRules) => {
     const snapshot: HistoryRecord = {
       timestamp: new Date().toISOString(),
       action: actionDescription,
@@ -936,7 +745,8 @@ export default function EstimatorApp() {
       dynamicColumns: JSON.parse(JSON.stringify(newDynamicColumns)),
       entityData: JSON.parse(JSON.stringify(newEntityData)),
       formulaTemplates: JSON.parse(JSON.stringify(newFormulaTemplates)),
-      dataTables: JSON.parse(JSON.stringify(newDataTables))
+      dataTables: JSON.parse(JSON.stringify(newDataTables)),
+      conditionalFormatRules: JSON.parse(JSON.stringify(newConditionalFormatRules))
     };
     
     // Prevent duplicate history records using refs to ensure we have the latest state
@@ -1007,6 +817,7 @@ export default function EstimatorApp() {
       if (record.entityData) setEntityData(record.entityData);
       if (record.formulaTemplates) setFormulaTemplates(record.formulaTemplates);
       if (record.dataTables) setDataTables(record.dataTables);
+      if (record.conditionalFormatRules) setConditionalFormatRules(record.conditionalFormatRules);
       setHistoryIndex(newIndex);
     }
   }, [canUndo, historyIndex, actionHistory]);
@@ -1028,6 +839,7 @@ export default function EstimatorApp() {
       if (record.entityData) setEntityData(record.entityData);
       if (record.formulaTemplates) setFormulaTemplates(record.formulaTemplates);
       if (record.dataTables) setDataTables(record.dataTables);
+      if (record.conditionalFormatRules) setConditionalFormatRules(record.conditionalFormatRules);
       setHistoryIndex(newIndex);
     }
   }, [canRedo, historyIndex, actionHistory]);
@@ -1060,6 +872,69 @@ export default function EstimatorApp() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo]);
+
+  const evaluateConditionalFormatting = (item: Item, rowData: TakeoffItem) => {
+    let rowClasses = "";
+    let cellClasses: Record<string, string> = {};
+
+    for (const rule of conditionalFormatRules) {
+      let valueToCompare: any = null;
+      let numericValue: number | null = null;
+      
+      if (rule.field === 'overage_pct') {
+        valueToCompare = rowData.overage_pct !== "" ? rowData.overage_pct : defaultOveragePct;
+        numericValue = parseFloat(valueToCompare);
+      } else if (rule.field === 'measured_qty') {
+        valueToCompare = rowData.measured_qty;
+        numericValue = parseFloat(valueToCompare);
+      } else if (rule.field === 'qty') {
+        valueToCompare = rowData.qty;
+        numericValue = parseFloat(valueToCompare);
+      } else if (rule.field === 'order_qty') {
+        valueToCompare = rowData.order_qty;
+        numericValue = parseFloat(valueToCompare);
+      } else if (rule.field === 'unit_price') {
+        valueToCompare = rowData.unit_price;
+        numericValue = parseFloat(valueToCompare || "0");
+      } else if (rule.field.startsWith('dynamic_')) {
+        const colKey = rule.field.replace('dynamic_', '');
+        const matKey = `MATERIAL:${item.item_id}`;
+        valueToCompare = entityData[matKey]?.[colKey] || "";
+        numericValue = parseFloat(valueToCompare);
+      }
+
+      if (valueToCompare === null || valueToCompare === undefined || valueToCompare === "") continue;
+
+      let isMatch = false;
+      const ruleValueNum = parseFloat(rule.value);
+
+      if (!isNaN(numericValue as number) && !isNaN(ruleValueNum)) {
+        switch (rule.operator) {
+          case '>': isMatch = (numericValue as number) > ruleValueNum; break;
+          case '<': isMatch = (numericValue as number) < ruleValueNum; break;
+          case '>=': isMatch = (numericValue as number) >= ruleValueNum; break;
+          case '<=': isMatch = (numericValue as number) <= ruleValueNum; break;
+          case '==': isMatch = (numericValue as number) === ruleValueNum; break;
+          case '!=': isMatch = (numericValue as number) !== ruleValueNum; break;
+        }
+      } else {
+        switch (rule.operator) {
+          case '==': isMatch = valueToCompare.toString() === rule.value; break;
+          case '!=': isMatch = valueToCompare.toString() !== rule.value; break;
+        }
+      }
+
+      if (isMatch) {
+        if (rule.applyTo === 'row') {
+          rowClasses += ` ${rule.color}`;
+        } else if (rule.applyTo === 'cell') {
+          cellClasses[rule.field] = (cellClasses[rule.field] || "") + ` ${rule.color}`;
+        }
+      }
+    }
+
+    return { rowClasses, cellClasses };
+  };
 
   const handleSelectItem = (itemId: string, checked: boolean) => {
     setSelectedItems(prev => {
@@ -1119,7 +994,8 @@ export default function EstimatorApp() {
                 newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
                 newData[itemId].order_qty,
                 customVariables,
-                resolveDynamicScope(item)
+                resolveDynamicScope(item),
+                dataTables
               ).toString();
             }
           }
@@ -1218,7 +1094,8 @@ export default function EstimatorApp() {
           newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
           newData[itemId].order_qty,
           newVars,
-          scope
+          scope,
+          currentDataTables
         ).toString();
         
         if (newQty !== newData[itemId].measured_qty) {
@@ -1309,7 +1186,8 @@ export default function EstimatorApp() {
           newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
           newData[itemId].order_qty,
           vars,
-          scope
+          scope,
+          dataTables
         ).toString();
         if (newQty !== newData[itemId].measured_qty) {
           newData[itemId] = { ...newData[itemId], measured_qty: newQty };
@@ -1677,25 +1555,15 @@ export default function EstimatorApp() {
       entityData,
       formulaTemplates,
       dataTables,
+      conditionalFormatRules,
       catalog,
       defaultOveragePct
     };
 
-    if (user) {
-      try {
-        const jobDocRef = doc(db, 'users', user.uid, 'jobs', currentJobId);
-        await setDoc(jobDocRef, newJob, { merge: true });
-        alert("Job saved successfully to cloud!");
-      } catch (err: any) {
-        console.error('Error saving to Firestore:', err.message);
-        alert("Error saving job to cloud: " + err.message);
-      }
-    } else {
-      const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
-      setSavedJobs(newSavedJobs);
-      localStorage.setItem('savedEstimatingJobs', JSON.stringify(newSavedJobs));
-      alert("Job saved locally! Log in to sync with cloud.");
-    }
+    const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
+    setSavedJobs(newSavedJobs);
+    localStorage.setItem('savedEstimatingJobs', JSON.stringify(newSavedJobs));
+    alert("Job saved locally!");
     setLastAutoSaveTime(new Date().toLocaleString());
   };
 
@@ -1721,31 +1589,16 @@ export default function EstimatorApp() {
       entityData: entityData,
       formulaTemplates: formulaTemplates,
       dataTables: dataTables,
+      conditionalFormatRules: conditionalFormatRules,
       defaultOveragePct: defaultOveragePct,
       jobNotes: jobNotes,
       createdAt: new Date().toISOString()
     };
 
-    if (user) {
-      try {
-        const userDocRef = doc(db, 'users', user.uid);
-        const userDoc = await getDoc(userDocRef);
-        const currentTemplates = userDoc.exists() ? (userDoc.data().projectTemplates || []) : [];
-        await setDoc(userDocRef, {
-          projectTemplates: [...currentTemplates, newTemplate],
-          lastUpdated: serverTimestamp()
-        }, { merge: true });
-        alert("Template saved successfully to cloud!");
-      } catch (err: any) {
-        console.error('Error saving template to Firestore:', err.message);
-        alert("Error saving template to cloud: " + err.message);
-      }
-    } else {
-      const newTemplates = [...templates, newTemplate];
-      setTemplates(newTemplates);
-      localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
-      alert("Template saved locally!");
-    }
+    const newTemplates = [...templates, newTemplate];
+    setTemplates(newTemplates);
+    localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
+    alert("Template saved locally!");
   };
 
   const createNewProject = () => {
@@ -1763,6 +1616,8 @@ export default function EstimatorApp() {
         setDynamicColumns(tpl.dynamicColumns || []);
         setEntityData(tpl.entityData || {});
         setFormulaTemplates(tpl.formulaTemplates || []);
+        setDataTables(tpl.dataTables || []);
+        setConditionalFormatRules(tpl.conditionalFormatRules || []);
         if (tpl.defaultOveragePct !== undefined) {
           setDefaultOveragePct(tpl.defaultOveragePct);
           localStorage.setItem('defaultOveragePct', tpl.defaultOveragePct);
@@ -1777,11 +1632,14 @@ export default function EstimatorApp() {
     
     // Blank project
     setTakeoffData({});
+    setConditionalFormatRules([]);
     setActionHistory([]);
     setHistoryIndex(0);
     setCustomVariables([]);
     setDynamicColumns([]);
     setEntityData({});
+    setDataTables([]);
+    setConditionalFormatRules([]);
     setJobNotes("");
     setDefaultOveragePct("");
     localStorage.removeItem('defaultOveragePct');
@@ -1792,20 +1650,7 @@ export default function EstimatorApp() {
     if (!window.confirm("Are you sure you want to delete this template?")) return;
     const newTemplates = templates.filter(t => t.id !== id);
     setTemplates(newTemplates);
-    
-    if (user) {
-      try {
-        const userDocRef = doc(db, 'users', user.uid);
-        await setDoc(userDocRef, {
-          projectTemplates: newTemplates,
-          lastUpdated: serverTimestamp()
-        }, { merge: true });
-      } catch (error) {
-        console.error("Error deleting template from Firestore:", error);
-      }
-    } else {
-      localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
-    }
+    localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
   };
 
   const loadTemplate = (id: string) => {
@@ -1834,7 +1679,9 @@ export default function EstimatorApp() {
       setDynamicColumns(jobData.dynamicColumns || []);
       setEntityData(jobData.entityData || {});
       setFormulaTemplates(jobData.formulaTemplates || []);
-      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || [], jobData.jobNotes || "", jobData.dynamicColumns || [], jobData.entityData || {}, jobData.formulaTemplates || []), 0);
+      setDataTables(jobData.dataTables || []);
+      setConditionalFormatRules(jobData.conditionalFormatRules || []);
+      setTimeout(() => recordHistory("Loaded Job from Storage", jobData.takeoffData, catalog, jobData.projectName, jobData.clientName, jobData.customVariables || [], jobData.jobNotes || "", jobData.dynamicColumns || [], jobData.entityData || {}, jobData.formulaTemplates || [], jobData.dataTables || [], jobData.conditionalFormatRules || []), 0);
     }
   };
 
@@ -1924,7 +1771,10 @@ export default function EstimatorApp() {
       catalog: catalog,
       customVariables: customVariables,
       dynamicColumns: dynamicColumns,
-      entityData: entityData
+      entityData: entityData,
+      formulaTemplates: formulaTemplates,
+      dataTables: dataTables,
+      conditionalFormatRules: conditionalFormatRules
     };
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(fullJobData, null, 2));
     const downloadAnchorNode = document.createElement('a');
@@ -1961,8 +1811,11 @@ export default function EstimatorApp() {
           setCustomVariables(importedData.customVariables || []);
           setDynamicColumns(importedData.dynamicColumns || []);
           setEntityData(importedData.entityData || {});
+          setFormulaTemplates(importedData.formulaTemplates || []);
+          setDataTables(importedData.dataTables || []);
+          setConditionalFormatRules(importedData.conditionalFormatRules || []);
           
-          setTimeout(() => recordHistory("Imported Job from JSON File", importedData.takeoffData, importedData.catalog || catalog, importedData.projectName, importedData.clientName, importedData.customVariables || [], importedData.jobNotes || "", importedData.dynamicColumns || [], importedData.entityData || {}), 0);
+          setTimeout(() => recordHistory("Imported Job from JSON File", importedData.takeoffData, importedData.catalog || catalog, importedData.projectName, importedData.clientName, importedData.customVariables || [], importedData.jobNotes || "", importedData.dynamicColumns || [], importedData.entityData || {}, importedData.formulaTemplates || [], importedData.dataTables || [], importedData.conditionalFormatRules || []), 0);
           alert("Job Imported Successfully!");
         }
       } catch (err) {
@@ -2177,7 +2030,8 @@ export default function EstimatorApp() {
           updatedItem.overage_pct !== "" ? updatedItem.overage_pct : defaultOveragePct,
           updatedItem.order_qty,
           customVariables,
-          resolveDynamicScope(item)
+          resolveDynamicScope(item),
+          dataTables
         ).toString();
         newData[qtyPanelItemId] = updatedItem;
         setTimeout(() => recordHistory(`Updated Auto Formula for ${itemInfo.item_name}`, newData, catalog, projectName, clientName), 0);
@@ -2353,18 +2207,6 @@ export default function EstimatorApp() {
             <Clock />
           </div>
           <div className="flex flex-wrap justify-center md:justify-end gap-3">
-            {user ? (
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-bold text-emerald-400 hidden sm:inline">{user.email}</span>
-                <button onClick={handleLogout} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
-                  Logout
-                </button>
-              </div>
-            ) : (
-              <button onClick={() => { setAuthMode('login'); setAuthModalOpen(true); }} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
-                Login / Register
-              </button>
-            )}
             <button onClick={() => openItemModal('add')} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
               <Plus size={16} /> Add Item
             </button>
@@ -2487,6 +2329,9 @@ export default function EstimatorApp() {
               </button>
               <button onClick={() => setDataTableModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
                 <Table size={16} /> Data Tables
+              </button>
+              <button onClick={() => setConditionalFormatModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Palette size={16} /> Formatting
               </button>
             </div>
           </div>
@@ -2972,7 +2817,8 @@ export default function EstimatorApp() {
                                           const rowData = takeoffData[item.item_id] || { in_scope: false, spec: "", qty: "", measured_qty: "", overage_pct: "", order_qty: "", evidence: "", qty_mode: "auto" };
                                         const isChecked = rowData.in_scope;
                                         const isDisabled = !isChecked;
-                                        const rowBg = isChecked ? "bg-emerald-50/40" : "hover:bg-slate-50";
+                                        const { rowClasses, cellClasses } = evaluateConditionalFormatting(item, rowData);
+                                        const rowBg = (isChecked ? "bg-emerald-50/40" : "hover:bg-slate-50") + rowClasses;
 
                                         const isError = typeof rowData.measured_qty === 'string' && rowData.measured_qty.startsWith('ERR');
                                         const displayQty = isError ? 'ERR' : (rowData.measured_qty || '');
@@ -3016,7 +2862,7 @@ export default function EstimatorApp() {
                                               <div className="flex items-center justify-between w-full">
                                                 <input 
                                                   type="text" 
-                                                  className="font-bold text-slate-800 text-[13px] bg-transparent border border-slate-200 md:border-transparent hover:border-slate-300 focus:border-emerald-500 focus:bg-white rounded px-2 md:px-1 py-1 md:py-0 w-full outline-none transition-colors" 
+                                                  className={`font-bold text-slate-800 text-[13px] bg-transparent border border-slate-200 md:border-transparent hover:border-slate-300 focus:border-emerald-500 focus:bg-white rounded px-2 md:px-1 py-1 md:py-0 w-full outline-none transition-colors ${cellClasses['item_name'] || ''}`} 
                                                   defaultValue={item.item_name} 
                                                   onBlur={(e) => updateItemName(item.item_id, e.target.value)} 
                                                   onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
@@ -3064,7 +2910,7 @@ export default function EstimatorApp() {
                                               <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Spec (Details)</span>
                                               <DebouncedInput 
                                                 type="text" 
-                                                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
+                                                className={`w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 ${cellClasses['spec'] || ''}`} 
                                                 placeholder="..." 
                                                 value={rowData.spec || ""} 
                                                 disabled={isDisabled} 
@@ -3077,7 +2923,7 @@ export default function EstimatorApp() {
                                               <span className="md:hidden text-xs font-bold text-emerald-700 uppercase mb-1">Take-off (Measured)</span>
                                               <DebouncedInput 
                                                 type="text" 
-                                                className="w-full border border-emerald-300 bg-emerald-50 rounded px-2 py-1.5 text-sm font-bold text-emerald-800 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
+                                                className={`w-full border border-emerald-300 bg-emerald-50 rounded px-2 py-1.5 text-sm font-bold text-emerald-800 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 ${cellClasses['qty'] || ''}`} 
                                                 placeholder="0" 
                                                 value={rowData.qty || ""} 
                                                 disabled={isDisabled} 
@@ -3091,7 +2937,7 @@ export default function EstimatorApp() {
                                               <div className="relative w-full">
                                                 <DebouncedInput 
                                                   type="text" 
-                                                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 pr-5 md:text-center disabled:bg-slate-100 disabled:text-slate-400" 
+                                                  className={`w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 pr-5 md:text-center disabled:bg-slate-100 disabled:text-slate-400 ${cellClasses['overage_pct'] || ''}`} 
                                                   placeholder={defaultOveragePct || "0"} 
                                                   value={rowData.overage_pct || ""} 
                                                   disabled={isDisabled} 
@@ -3106,7 +2952,7 @@ export default function EstimatorApp() {
                                               <span className="md:hidden text-xs font-bold text-emerald-700 uppercase mb-1">Order (Pkg/Divisor)</span>
                                               <DebouncedInput 
                                                 type="text" 
-                                                className="w-full border-2 border-emerald-500 bg-emerald-100 font-bold text-emerald-900 rounded px-2 py-1 text-sm md:text-center focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300" 
+                                                className={`w-full border-2 border-emerald-500 bg-emerald-100 font-bold text-emerald-900 rounded px-2 py-1 text-sm md:text-center focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300 ${cellClasses['order_qty'] || ''}`} 
                                                 placeholder="0" 
                                                 value={rowData.order_qty || ""} 
                                                 disabled={isDisabled} 
@@ -3130,7 +2976,7 @@ export default function EstimatorApp() {
                                                 <input 
                                                   type="text" 
                                                   readOnly 
-                                                  className={`w-full border font-bold rounded px-2 py-1.5 text-sm md:text-center transition-colors outline-none cursor-pointer ${qtyBgClass} disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300 disabled:cursor-not-allowed`} 
+                                                  className={`w-full border font-bold rounded px-2 py-1.5 text-sm md:text-center transition-colors outline-none cursor-pointer ${qtyBgClass} disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-300 disabled:cursor-not-allowed ${cellClasses['measured_qty'] || ''}`} 
                                                   placeholder="0" 
                                                   value={displayQty} 
                                                   disabled={isDisabled}
@@ -3148,7 +2994,7 @@ export default function EstimatorApp() {
                                                   <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Unit Price</span>
                                                   <DebouncedInput 
                                                     type="text" 
-                                                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400" 
+                                                    className={`w-full border border-slate-300 rounded px-2 py-1.5 text-sm font-medium text-slate-700 transition-colors focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 ${cellClasses['unit_price'] || ''}`} 
                                                     placeholder="0.00" 
                                                     value={rowData.unit_price || ""} 
                                                     disabled={isDisabled} 
@@ -3552,19 +3398,11 @@ export default function EstimatorApp() {
                                 <button 
                                   onClick={async () => {
                                     if (window.confirm(`Delete project "${job.projectName}"? This cannot be undone.`)) {
-                                      if (user) {
-                                        try {
-                                          const jobDocRef = doc(db, 'users', user.uid, 'jobs', id);
-                                          await deleteDoc(jobDocRef);
-                                        } catch (error) {
-                                          console.error("Error deleting job from Firestore:", error);
-                                        }
-                                      } else {
-                                        const newJobs = { ...savedJobs };
-                                        delete newJobs[id];
-                                        setSavedJobs(newJobs);
-                                        localStorage.setItem('savedEstimatingJobs', JSON.stringify(newJobs));
-                                      }
+                                      const newJobs = { ...savedJobs };
+                                      delete newJobs[id];
+                                      setSavedJobs(newJobs);
+                                      localStorage.setItem('savedEstimatingJobs', JSON.stringify(newJobs));
+                                      
                                       if (currentJobId === id) {
                                         setCurrentJobId("");
                                       }
@@ -3583,6 +3421,157 @@ export default function EstimatorApp() {
                 </table>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Conditional Formatting Modal */}
+      {conditionalFormatModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-3xl p-6 border-t-4 border-indigo-500 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Conditional Formatting</h2>
+              <button onClick={() => setConditionalFormatModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X size={24} /></button>
+            </div>
+            
+            <div className="mb-6">
+              <button 
+                onClick={() => {
+                  const newRule: ConditionalFormatRule = {
+                    id: "RULE-" + Date.now(),
+                    field: "overage_pct",
+                    operator: ">",
+                    value: "15",
+                    color: "bg-red-100",
+                    applyTo: "row"
+                  };
+                  const newRules = [...conditionalFormatRules, newRule];
+                  setConditionalFormatRules(newRules);
+                  recordHistory("Added conditional formatting rule", takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, dataTables, newRules);
+                }}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded font-bold text-sm flex items-center gap-2"
+              >
+                <Plus size={16} /> Add Rule
+              </button>
+            </div>
+
+            {conditionalFormatRules.length === 0 ? (
+              <div className="text-center py-8 text-slate-500 italic bg-slate-50 rounded border border-slate-200">
+                No conditional formatting rules defined.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {conditionalFormatRules.map((rule, idx) => (
+                  <div key={rule.id} className="flex flex-wrap items-center gap-3 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-slate-700">If</span>
+                      <select 
+                        value={rule.field}
+                        onChange={(e) => {
+                          const newRules = [...conditionalFormatRules];
+                          newRules[idx].field = e.target.value;
+                          setConditionalFormatRules(newRules);
+                          recordHistory("Updated conditional formatting rule", takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, dataTables, newRules);
+                        }}
+                        className="border border-slate-300 rounded px-2 py-1 text-sm"
+                      >
+                        <option value="overage_pct">Overage %</option>
+                        <option value="measured_qty">Take-off (Measured)</option>
+                        <option value="qty">QTY (Final)</option>
+                        <option value="order_qty">Order (Pkg/Divisor)</option>
+                        <option value="unit_price">Unit Price</option>
+                        {dynamicColumns.map(col => (
+                          <option key={col.id} value={`dynamic_${col.key}`}>{col.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <select 
+                      value={rule.operator}
+                      onChange={(e) => {
+                        const newRules = [...conditionalFormatRules];
+                        newRules[idx].operator = e.target.value as any;
+                        setConditionalFormatRules(newRules);
+                        recordHistory("Updated conditional formatting rule", takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, dataTables, newRules);
+                      }}
+                      className="border border-slate-300 rounded px-2 py-1 text-sm"
+                    >
+                      <option value=">">&gt;</option>
+                      <option value="<">&lt;</option>
+                      <option value=">=">&gt;=</option>
+                      <option value="<=">&lt;=</option>
+                      <option value="==">==</option>
+                      <option value="!=">!=</option>
+                    </select>
+
+                    <input 
+                      type="text" 
+                      value={rule.value}
+                      onChange={(e) => {
+                        const newRules = [...conditionalFormatRules];
+                        newRules[idx].value = e.target.value;
+                        setConditionalFormatRules(newRules);
+                      }}
+                      onBlur={() => recordHistory("Updated conditional formatting rule", takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, dataTables, conditionalFormatRules)}
+                      className="border border-slate-300 rounded px-2 py-1 text-sm w-24"
+                      placeholder="Value"
+                    />
+
+                    <div className="flex items-center gap-2 ml-auto">
+                      <span className="text-sm font-bold text-slate-700">Apply to</span>
+                      <select 
+                        value={rule.applyTo}
+                        onChange={(e) => {
+                          const newRules = [...conditionalFormatRules];
+                          newRules[idx].applyTo = e.target.value as any;
+                          setConditionalFormatRules(newRules);
+                          recordHistory("Updated conditional formatting rule", takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, dataTables, newRules);
+                        }}
+                        className="border border-slate-300 rounded px-2 py-1 text-sm"
+                      >
+                        <option value="row">Entire Row</option>
+                        <option value="cell">Specific Cell</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-slate-700">Color</span>
+                      <select 
+                        value={rule.color}
+                        onChange={(e) => {
+                          const newRules = [...conditionalFormatRules];
+                          newRules[idx].color = e.target.value;
+                          setConditionalFormatRules(newRules);
+                          recordHistory("Updated conditional formatting rule", takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, dataTables, newRules);
+                        }}
+                        className="border border-slate-300 rounded px-2 py-1 text-sm"
+                      >
+                        <option value="bg-red-100">Light Red Bg</option>
+                        <option value="bg-amber-100">Light Amber Bg</option>
+                        <option value="bg-emerald-100">Light Emerald Bg</option>
+                        <option value="bg-blue-100">Light Blue Bg</option>
+                        <option value="text-red-600 font-bold">Red Text</option>
+                        <option value="text-amber-600 font-bold">Amber Text</option>
+                        <option value="text-emerald-600 font-bold">Emerald Text</option>
+                        <option value="text-blue-600 font-bold">Blue Text</option>
+                      </select>
+                    </div>
+
+                    <button 
+                      onClick={() => {
+                        const newRules = conditionalFormatRules.filter(r => r.id !== rule.id);
+                        setConditionalFormatRules(newRules);
+                        recordHistory("Deleted conditional formatting rule", takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, dataTables, newRules);
+                      }}
+                      className="text-red-500 hover:text-red-700 p-1"
+                      title="Delete Rule"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -4088,13 +4077,25 @@ export default function EstimatorApp() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Formula</label>
-                  <input 
-                    type="text" 
-                    id="ft-formula"
-                    defaultValue={editingFormulaTemplate?.formula || ''}
-                    placeholder="e.g. [Take-off] * 1.15 / [Order]"
-                    className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none font-mono"
-                  />
+                  <div className="border border-indigo-200 rounded overflow-hidden focus-within:ring-2 focus-within:ring-indigo-200">
+                    <CodeMirror
+                      value={ftFormula}
+                      onChange={(val) => setFtFormula(val)}
+                      extensions={[
+                        javascript(),
+                        autocompletion({ override: [formulaCompletions] }),
+                        lintGutter(),
+                        formulaLinter,
+                        formulaHighlightPlugin
+                      ]}
+                      className="font-mono text-sm"
+                      basicSetup={{
+                        lineNumbers: false,
+                        foldGutter: false,
+                        highlightActiveLine: false,
+                      }}
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Description (optional)</label>
@@ -4109,7 +4110,10 @@ export default function EstimatorApp() {
                 <div className="flex justify-end gap-2 pt-2">
                   {editingFormulaTemplate && (
                     <button 
-                      onClick={() => setEditingFormulaTemplate(null)}
+                      onClick={() => {
+                        setEditingFormulaTemplate(null);
+                        setFtFormula("");
+                      }}
                       className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded transition"
                     >
                       Cancel Edit
@@ -4118,12 +4122,11 @@ export default function EstimatorApp() {
                   <button 
                     onClick={() => {
                       const nameInput = document.getElementById('ft-name') as HTMLInputElement;
-                      const formulaInput = document.getElementById('ft-formula') as HTMLInputElement;
                       const descInput = document.getElementById('ft-desc') as HTMLInputElement;
                       const scopeInput = document.getElementById('ft-scope') as HTMLSelectElement;
                       
                       const name = nameInput.value.trim();
-                      const formula = formulaInput.value.trim();
+                      const formula = ftFormula.trim();
                       const desc = descInput.value.trim();
                       const scope = scopeInput.value as any;
                       
@@ -4159,7 +4162,7 @@ export default function EstimatorApp() {
                       
                       // Reset form
                       nameInput.value = '';
-                      formulaInput.value = '';
+                      setFtFormula('');
                       descInput.value = '';
                       scopeInput.value = 'global';
                       setEditingFormulaTemplate(null);
@@ -4240,13 +4243,12 @@ export default function EstimatorApp() {
                             <button 
                               onClick={() => {
                                 setEditingFormulaTemplate(t);
+                                setFtFormula(t.formula);
                                 setTimeout(() => {
                                   const nameInput = document.getElementById('ft-name') as HTMLInputElement;
-                                  const formulaInput = document.getElementById('ft-formula') as HTMLInputElement;
                                   const descInput = document.getElementById('ft-desc') as HTMLInputElement;
                                   const scopeInput = document.getElementById('ft-scope') as HTMLSelectElement;
                                   if (nameInput) nameInput.value = t.name;
-                                  if (formulaInput) formulaInput.value = t.formula;
                                   if (descInput) descInput.value = t.description || '';
                                   if (scopeInput) scopeInput.value = t.scope;
                                 }, 10);
@@ -4318,13 +4320,25 @@ export default function EstimatorApp() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Value or Formula</label>
-                  <input 
-                    type="text" 
-                    id="cv-value"
-                    defaultValue={editingCustomVar?.formula || editingCustomVar?.value || ''}
-                    placeholder="e.g. 1.15 or [OtherVar] * 2"
-                    className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-amber-200 outline-none"
-                  />
+                  <div className="border border-amber-200 rounded overflow-hidden focus-within:ring-2 focus-within:ring-amber-200">
+                    <CodeMirror
+                      value={cvFormula}
+                      onChange={(val) => setCvFormula(val)}
+                      extensions={[
+                        javascript(),
+                        autocompletion({ override: [formulaCompletions] }),
+                        lintGutter(),
+                        formulaLinter,
+                        formulaHighlightPlugin
+                      ]}
+                      className="font-mono text-sm"
+                      basicSetup={{
+                        lineNumbers: false,
+                        foldGutter: false,
+                        highlightActiveLine: false,
+                      }}
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Description (optional)</label>
@@ -4339,7 +4353,10 @@ export default function EstimatorApp() {
                 <div className="flex justify-end gap-2 pt-2">
                   {editingCustomVar && (
                     <button 
-                      onClick={() => setEditingCustomVar(null)}
+                      onClick={() => {
+                        setEditingCustomVar(null);
+                        setCvFormula("");
+                      }}
                       className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded transition"
                     >
                       Cancel Edit
@@ -4348,11 +4365,10 @@ export default function EstimatorApp() {
                   <button 
                     onClick={() => {
                       const nameInput = document.getElementById('cv-name') as HTMLInputElement;
-                      const valueInput = document.getElementById('cv-value') as HTMLInputElement;
                       const descInput = document.getElementById('cv-desc') as HTMLInputElement;
                       
                       const name = nameInput.value.trim().replace(/\s+/g, '_');
-                      const formula = valueInput.value.trim();
+                      const formula = cvFormula.trim();
                       const desc = descInput.value.trim();
                       
                       if (!name) {
@@ -4391,7 +4407,7 @@ export default function EstimatorApp() {
                       
                       // Reset form
                       nameInput.value = '';
-                      valueInput.value = '';
+                      setCvFormula('');
                       descInput.value = '';
                       setEditingCustomVar(null);
                     }}
@@ -4432,13 +4448,12 @@ export default function EstimatorApp() {
                             <button 
                               onClick={() => {
                                 setEditingCustomVar(v);
+                                setCvFormula(v.formula || v.value.toString());
                                 // Small delay to let React render the form inputs with new default values
                                 setTimeout(() => {
                                   const nameInput = document.getElementById('cv-name') as HTMLInputElement;
-                                  const valueInput = document.getElementById('cv-value') as HTMLInputElement;
                                   const descInput = document.getElementById('cv-desc') as HTMLInputElement;
                                   if (nameInput) nameInput.value = v.name;
-                                  if (valueInput) valueInput.value = v.formula || v.value.toString();
                                   if (descInput) descInput.value = v.description || '';
                                 }, 10);
                               }}
@@ -4803,7 +4818,8 @@ export default function EstimatorApp() {
                     takeoffData[qtyPanelItemId]?.overage_pct !== "" && takeoffData[qtyPanelItemId]?.overage_pct !== undefined ? takeoffData[qtyPanelItemId]?.overage_pct : defaultOveragePct, 
                     takeoffData[qtyPanelItemId]?.order_qty || 1,
                     customVariables,
-                    resolveDynamicScope(item)
+                    resolveDynamicScope(item),
+                    dataTables
                   );
                   const isError = typeof previewResult === 'string' && previewResult.startsWith('ERR');
                   return (
@@ -5818,73 +5834,7 @@ export default function EstimatorApp() {
         </div>
       )}
 
-      {/* Auth Modal */}
-      {authModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <motion.div 
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
-          >
-            <div className="bg-slate-800 p-6 text-white flex justify-between items-center">
-              <h2 className="text-xl font-bold">{authMode === 'login' ? 'Welcome Back' : 'Create Account'}</h2>
-              <button onClick={() => setAuthModalOpen(false)} className="text-slate-400 hover:text-white transition-colors">
-                <X size={24} />
-              </button>
-            </div>
-            
-            <form onSubmit={handleAuth} className="p-8 space-y-6">
-              {authError && (
-                <div className="bg-red-50 border-l-4 border-red-500 p-4 text-red-700 text-sm font-medium">
-                  {authError}
-                </div>
-              )}
-              
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Email Address</label>
-                <input 
-                  type="email" 
-                  required
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg p-3 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all"
-                  placeholder="you@example.com"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Password</label>
-                <input 
-                  type="password" 
-                  required
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg p-3 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all"
-                  placeholder="••••••••"
-                />
-              </div>
-              
-              <button 
-                type="submit" 
-                disabled={authLoading}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-400 text-white font-bold py-4 rounded-lg shadow-lg transition-all transform hover:-translate-y-0.5 active:translate-y-0"
-              >
-                {authLoading ? 'Processing...' : (authMode === 'login' ? 'Sign In' : 'Sign Up')}
-              </button>
-              
-              <div className="text-center">
-                <button 
-                  type="button"
-                  onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
-                  className="text-sm font-bold text-emerald-600 hover:text-emerald-500 transition-colors"
-                >
-                  {authMode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
-                </button>
-              </div>
-            </form>
-          </motion.div>
-        </div>
-      )}
+      {/* Auto-save Templates Modal removed for local mode */}
     </div>
   );
 }

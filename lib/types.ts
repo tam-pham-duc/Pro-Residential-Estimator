@@ -61,6 +61,15 @@ export interface FormulaTemplate {
   createdAt: string;
 }
 
+export interface ConditionalFormatRule {
+  id: string;
+  field: string;
+  operator: '>' | '<' | '==' | '!=' | '>=' | '<=';
+  value: string;
+  color: string;
+  applyTo: 'row' | 'cell';
+}
+
 export interface ProjectTemplate {
   id: string;
   name: string;
@@ -73,6 +82,7 @@ export interface ProjectTemplate {
   entityData: Record<string, Record<string, any>>;
   formulaTemplates: FormulaTemplate[];
   dataTables: DataTable[];
+  conditionalFormatRules: ConditionalFormatRule[];
   defaultOveragePct: string;
   jobNotes: string;
   createdAt: string;
@@ -91,6 +101,7 @@ export interface HistoryRecord {
   entityData?: Record<string, Record<string, any>>;
   formulaTemplates?: FormulaTemplate[];
   dataTables?: DataTable[];
+  conditionalFormatRules?: ConditionalFormatRule[];
 }
 
 export interface Job {
@@ -106,6 +117,7 @@ export interface Job {
   entityData: Record<string, Record<string, any>>;
   formulaTemplates: FormulaTemplate[];
   dataTables: DataTable[];
+  conditionalFormatRules: ConditionalFormatRule[];
   catalog: Item[];
   defaultOveragePct: string;
 }
