@@ -355,6 +355,30 @@ export default function EstimatorApp() {
     if (showPricing) setShowPricingColumns(showPricing === 'true');
 
     setCurrentJobId("JOB-" + Date.now());
+
+    // Check for auto-saved sessions
+    const autoSavedProject = localStorage.getItem('autoSavedProject');
+    const autoSavedTemplates = localStorage.getItem('autoSavedTemplates');
+
+    if (autoSavedProject) {
+      try {
+        const parsedProject = JSON.parse(autoSavedProject);
+        setAutoSaveData(parsedProject);
+        setAutoSaveModalOpen(true);
+      } catch (e) {
+        console.error("Failed to parse autoSavedProject", e);
+      }
+    }
+
+    if (autoSavedTemplates) {
+      try {
+        const parsedTemplates = JSON.parse(autoSavedTemplates);
+        setAutoSaveTemplatesData(parsedTemplates);
+        setAutoSaveTemplatesModalOpen(true);
+      } catch (e) {
+        console.error("Failed to parse autoSavedTemplates", e);
+      }
+    }
   }, []);
 
   const [allCategories, setAllCategories] = useState<string[]>([]);
