@@ -1994,6 +1994,138 @@ export default function EstimatorApp() {
     event.target.value = "";
   };
 
+  const exportDataTableCSV = (table: DataTable) => {
+    if (!table) return;
+    
+    // Header row
+    const headers = table.columns.map(c => `"${c.name.replace(/"/g, '""')}"`).join(',');
+    
+    // Data rows
+    const rows = table.rows.map(row => {
+      return table.columns.map(c => {
+        const val = row[c.key] !== undefined && row[c.key] !== null ? String(row[c.key]) : '';
+        return `"${val.replace(/"/g, '""')}"`;
+      }).join(',');
+    });
+    
+    const csvContent = [headers, ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${table.name.replace(/\s+/g, '_')}_export_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const importDataTableCSV = (event: React.ChangeEvent<HTMLInputElement>, tableId: string) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+        if (lines.length < 1) {
+          alert("CSV file is empty.");
+          return;
+        }
+
+        const parseCSVLine = (line: string) => {
+          const result = [];
+          let current = '';
+          let inQuotes = false;
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+              if (inQuotes && line[i+1] === '"') {
+                current += '"';
+                i++;
+              } else {
+                inQuotes = !inQuotes;
+              }
+            } else if (char === ',' && !inQuotes) {
+              result.push(current);
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          result.push(current);
+          return result;
+        };
+
+        const headers = parseCSVLine(lines[0]);
+        const replaceColumns = window.confirm("Do you want to replace existing columns with the CSV headers? (Cancel will only import rows matching existing columns)");
+
+        let newColumns = [...(dataTables.find(t => t.id === tableId)?.columns || [])];
+        
+        if (replaceColumns) {
+          newColumns = headers.map(h => {
+            const name = h.trim();
+            const key = name.replace(/\s+/g, '_');
+            let type: 'string' | 'number' = 'string';
+            if (lines.length > 1) {
+              const firstRowVals = parseCSVLine(lines[1]);
+              const valIndex = headers.indexOf(h);
+              if (valIndex !== -1 && firstRowVals[valIndex]) {
+                const num = Number(firstRowVals[valIndex]);
+                if (!isNaN(num)) type = 'number';
+              }
+            }
+            return { name, key, type };
+          });
+        }
+
+        const newRows = lines.slice(1).map(line => {
+          const vals = parseCSVLine(line);
+          const rowObj: Record<string, any> = {};
+          
+          if (replaceColumns) {
+            newColumns.forEach((col, idx) => {
+              if (idx < vals.length) {
+                rowObj[col.key] = col.type === 'number' ? (parseFloat(vals[idx]) || 0) : vals[idx];
+              } else {
+                rowObj[col.key] = col.type === 'number' ? 0 : '';
+              }
+            });
+          } else {
+            newColumns.forEach(col => {
+              const headerIdx = headers.findIndex(h => h.trim().toLowerCase() === col.name.toLowerCase() || h.trim().toLowerCase() === col.key.toLowerCase());
+              if (headerIdx !== -1 && headerIdx < vals.length) {
+                rowObj[col.key] = col.type === 'number' ? (parseFloat(vals[headerIdx]) || 0) : vals[headerIdx];
+              } else {
+                rowObj[col.key] = col.type === 'number' ? 0 : '';
+              }
+            });
+          }
+          return rowObj;
+        });
+
+        const nextTables = dataTables.map(t => {
+          if (t.id === tableId) {
+            return { ...t, columns: newColumns, rows: replaceColumns ? newRows : [...t.rows, ...newRows] };
+          }
+          return t;
+        });
+
+        setDataTables(nextTables);
+        setEditingDataTable(nextTables.find(t => t.id === tableId)!);
+        localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+        recordHistory(`Imported CSV into table ${nextTables.find(t => t.id === tableId)?.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+        alert("CSV imported successfully!");
+
+      } catch (err) {
+        alert("Error parsing CSV file.");
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = "";
+  };
+
   const openQtyPanel = (itemId: string) => {
     const data = takeoffData[itemId] || {};
     const formula = data.custom_formula || DEFAULT_QTY_FORMULA;
@@ -5563,6 +5695,17 @@ export default function EstimatorApp() {
                         </button>
                       </div>
                       <div className="flex gap-2">
+                        <button 
+                          onClick={() => exportDataTableCSV(editingDataTable)}
+                          title="Export Table to CSV"
+                          className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded text-xs font-bold flex items-center gap-1"
+                        >
+                          <Download size={14} /> Export CSV
+                        </button>
+                        <label className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1 rounded text-xs font-bold flex items-center gap-1 cursor-pointer" title="Import Table from CSV">
+                          <Upload size={14} /> Import CSV
+                          <input type="file" className="hidden" accept=".csv" onChange={(e) => importDataTableCSV(e, editingDataTable.id)} />
+                        </label>
                         <button 
                           onClick={() => {
                             const colName = window.prompt("Column Name:");
