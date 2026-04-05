@@ -1,14 +1,13 @@
-import { evaluate, all, create } from 'mathjs';
 import { CustomVariable, Item } from "./types";
-
-const math = create(all);
+import { normalizeKey, buildContext, evaluateFormula, validateFormula as validateEngineFormula } from '../services/formulaEngine';
 
 export const DEFAULT_QTY_FORMULA = "[qty] * (1 + [overage_pct] / 100)";
 
 export function evaluateMath(expression: string): number | string {
   if (!expression || typeof expression !== 'string') return "";
   try {
-    const result = math.evaluate(expression);
+    const result = evaluateFormula(expression, {});
+    if (result === "ERR") return "";
     return typeof result === 'number' ? result : "";
   } catch (e) {
     return "";
@@ -36,7 +35,7 @@ export function recalculateCustomVariables(variables: CustomVariable[]): CustomV
   const scope: Record<string, number> = {};
   
   // Initialize scope with 0
-  newVars.forEach(v => scope[v.name] = 0);
+  newVars.forEach(v => scope[normalizeKey(v.name)] = 0);
   
   // Simple iterative approach for dependencies (could be improved with a graph)
   for (let i = 0; i < 5; i++) { // Max 5 passes for nested dependencies
@@ -44,23 +43,41 @@ export function recalculateCustomVariables(variables: CustomVariable[]): CustomV
     newVars.forEach(v => {
       if (v.formula) {
         try {
-          // Replace [var] with scope value
-          let formula = v.formula;
-          const varsInFormula = extractVariablesFromFormula(formula);
-          varsInFormula.forEach(vn => {
-            const val = scope[vn] || 0;
-            formula = formula.replace(new RegExp(`\\[${vn}\\]`, 'g'), val.toString());
-          });
-          
-          const result = math.evaluate(formula);
-          if (typeof result === 'number' && result !== scope[v.name]) {
-            scope[v.name] = result;
+          const context: Record<string, any> = { ...scope };
+          // Add math functions
+          context['ROUNDUP'] = (val: number, decimals: number = 0) => {
+            const multiplier = Math.pow(10, decimals);
+            return Math.ceil(val * multiplier) / multiplier;
+          };
+          context['ROUNDDOWN'] = (val: number, decimals: number = 0) => {
+            const multiplier = Math.pow(10, decimals);
+            return Math.floor(val * multiplier) / multiplier;
+          };
+          context['ROUND'] = (val: number, decimals: number = 0) => {
+            const multiplier = Math.pow(10, decimals);
+            return Math.round(val * multiplier) / multiplier;
+          };
+          context['IF'] = (condition: any, trueVal: any, falseVal: any) => condition ? trueVal : falseVal;
+          context['AND'] = (...args: any[]) => args.every(Boolean);
+          context['OR'] = (...args: any[]) => args.some(Boolean);
+          context['NOT'] = (val: any) => !val;
+          context['MAX'] = Math.max;
+          context['MIN'] = Math.min;
+          context['CEILING'] = Math.ceil;
+          context['FLOOR'] = Math.floor;
+          context['ABS'] = Math.abs;
+          context['SQRT'] = Math.sqrt;
+          context['POWER'] = Math.pow;
+
+          const result = evaluateFormula(v.formula, context);
+          if (typeof result === 'number' && result !== scope[normalizeKey(v.name)]) {
+            scope[normalizeKey(v.name)] = result;
             v.value = result;
             changed = true;
           }
         } catch (e) {
           v.value = 0;
-          scope[v.name] = 0;
+          scope[normalizeKey(v.name)] = 0;
         }
       }
     });
@@ -81,56 +98,27 @@ export function evaluateCustomFormula(
 ): number | string {
   if (!formula) return 0;
   
-  try {
-    let processedFormula = formula;
-    
-    // 1. Replace built-in variables
-    processedFormula = processedFormula.replace(/\[qty\]/g, (Number(qty) || 0).toString());
-    processedFormula = processedFormula.replace(/\[overage_pct\]/g, (Number(overagePct) || 0).toString());
-    processedFormula = processedFormula.replace(/\[order_qty\]/g, (Number(orderQty) || 0).toString());
-    
-    // 2. Replace custom variables
-    customVariables.forEach(v => {
-      processedFormula = processedFormula.replace(new RegExp(`\\[${v.name}\\]`, 'g'), (v.value || 0).toString());
-    });
-    
-    // 3. Replace dynamic scope variables
-    Object.entries(dynamicScope).forEach(([key, value]) => {
-      processedFormula = processedFormula.replace(new RegExp(`\\[${key}\\]`, 'g'), (Number(value) || 0).toString());
-    });
-    
-    // 4. Handle common math functions (mathjs handles most of these natively if they are lowercase or we map them)
-    // We can just evaluate it with mathjs
-    const scope = {
-      lookup: (tableName: string, searchCol: string, searchVal: any, resultCol: string) => {
-        const table = dataTables.find(t => t.name === tableName);
-        if (!table) throw new Error(`Table not found: ${tableName}`);
-        const row = table.rows.find((r: any) => String(r[searchCol]) === String(searchVal));
-        if (!row) throw new Error(`Value not found in table: ${searchVal}`);
-        const result = row[resultCol];
-        if (result === undefined) throw new Error(`Column not found: ${resultCol}`);
-        return Number(result) || result;
-      },
-      roundup: (val: number, decimals: number = 0) => {
-        const multiplier = Math.pow(10, decimals);
-        return Math.ceil(val * multiplier) / multiplier;
-      },
-      rounddown: (val: number, decimals: number = 0) => {
-        const multiplier = Math.pow(10, decimals);
-        return Math.floor(val * multiplier) / multiplier;
-      },
-      if: (condition: any, trueVal: any, falseVal: any) => condition ? trueVal : falseVal,
-      and: (...args: any[]) => args.every(Boolean),
-      or: (...args: any[]) => args.some(Boolean),
-      not: (val: any) => !val,
-    };
-    
-    const result = math.evaluate(processedFormula.toLowerCase(), scope);
-    return typeof result === 'number' ? result : 0;
-  } catch (e: any) {
-    console.error("Formula evaluation error:", e);
-    return "ERR: " + e.message;
-  }
+  const row = {
+    qty,
+    overage_pct: overagePct,
+    order_qty: orderQty,
+    takeoff: qty
+  };
+
+  const context = buildContext(row, [], customVariables, dynamicScope);
+
+  // Add lookup function
+  context['LOOKUP'] = (tableName: string, searchCol: string, searchVal: any, resultCol: string) => {
+    const table = dataTables.find(t => t.name === tableName);
+    if (!table) throw new Error(`Table not found: ${tableName}`);
+    const r = table.rows.find((r: any) => String(r[searchCol]) === String(searchVal));
+    if (!r) throw new Error(`Value not found in table: ${searchVal}`);
+    const result = r[resultCol];
+    if (result === undefined) throw new Error(`Column not found: ${resultCol}`);
+    return Number(result) || result;
+  };
+
+  return evaluateFormula(formula, context);
 }
 
 export function validateCustomFormula(
@@ -142,40 +130,23 @@ export function validateCustomFormula(
 ): { isValid: boolean; error?: string } {
   if (!formula) return { isValid: true };
   
-  try {
-    const variables = extractVariablesFromFormula(formula);
-    const availableVars = [
-      'qty', 'overage_pct', 'order_qty',
-      ...customVariables.map(v => v.name),
-      ...Object.keys(dynamicScope),
-      ...Object.keys(variableRegistry)
-    ];
-    
-    for (const v of variables) {
-      if (!availableVars.includes(v)) {
-        return { isValid: false, error: `Unknown variable: [${v}]` };
-      }
-    }
-    
-    // Try a test evaluation with 1s
-    let testFormula = formula;
-    variables.forEach(v => {
-      testFormula = testFormula.replace(new RegExp(`\\[${v}\\]`, 'g'), "1");
-    });
-    
-    const scope = {
-      lookup: (tableName: string, searchCol: string, searchVal: any, resultCol: string) => 1,
-      roundup: (val: number, decimals: number = 0) => 1,
-      rounddown: (val: number, decimals: number = 0) => 1,
-      if: (condition: any, trueVal: any, falseVal: any) => 1,
-      and: (...args: any[]) => true,
-      or: (...args: any[]) => true,
-      not: (val: any) => false,
-    };
-    
-    math.evaluate(testFormula.toLowerCase(), scope);
-    return { isValid: true };
-  } catch (e: any) {
-    return { isValid: false, error: e.message };
-  }
+  const row = {
+    qty: 1,
+    overage_pct: 1,
+    order_qty: 1,
+    takeoff: 1
+  };
+
+  const context = buildContext(row, [], customVariables, dynamicScope);
+  
+  // Add variable registry to context
+  Object.keys(variableRegistry).forEach(k => {
+    context[normalizeKey(k)] = 1;
+  });
+
+  // Add lookup function
+  context['LOOKUP'] = (tableName: string, searchCol: string, searchVal: any, resultCol: string) => 1;
+
+  return validateEngineFormula(formula, context);
 }
+

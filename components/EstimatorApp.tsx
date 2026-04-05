@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables, extractVariablesFromFormula } from '@/lib/estimator-utils';
+import { normalizeKey } from '@/services/formulaEngine';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable, ConditionalFormatRule } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings,
@@ -3592,7 +3593,7 @@ export default function EstimatorApp() {
                   e.preventDefault();
                   const form = e.target as HTMLFormElement;
                   const name = (form.elements.namedItem('colName') as HTMLInputElement).value.trim();
-                  const key = editingColumn ? editingColumn.key : (form.elements.namedItem('colKey') as HTMLInputElement).value.trim();
+                  const key = editingColumn ? editingColumn.key : normalizeKey(name);
                   const dataType = (form.elements.namedItem('colType') as HTMLSelectElement).value as 'number' | 'text' | 'boolean';
                   const scope = (form.elements.namedItem('colScope') as HTMLSelectElement).value as 'category' | 'subcategory' | 'itemgroup' | 'material' | 'global';
                   const category = (form.elements.namedItem('colCat') as HTMLSelectElement)?.value || undefined;
@@ -3603,12 +3604,7 @@ export default function EstimatorApp() {
                   const defaultValue = (form.elements.namedItem('colDefault') as HTMLInputElement).value.trim();
                   
                   if (!name || !key) {
-                    alert("Name and Key are required.");
-                    return;
-                  }
-                  
-                  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-                    alert("Key must be a valid variable name (letters, numbers, underscores, starting with a letter).");
+                    alert("Name is required.");
                     return;
                   }
                   
@@ -3617,7 +3613,7 @@ export default function EstimatorApp() {
                     newCols = newCols.map(c => c.id === editingColumn.id ? { ...c, name, key, dataType, scope, unit, defaultValue, category, subCategory, itemGroup, materialName } : c);
                   } else {
                     if (newCols.some(c => c.key.toLowerCase() === key.toLowerCase())) {
-                      alert("A column with this key already exists.");
+                      alert("A column with this name/key already exists.");
                       return;
                     }
                     newCols.push({
@@ -3648,10 +3644,6 @@ export default function EstimatorApp() {
                   <div className="flex-1">
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Name</label>
                     <input name="colName" type="text" required defaultValue={editingColumn?.name || ""} className="w-full border rounded p-2 text-sm focus:border-indigo-500 outline-none" placeholder="e.g., Labor Rate" />
-                  </div>
-                  <div className="flex-1">
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Key (Variable)</label>
-                    <input name="colKey" type="text" required defaultValue={editingColumn?.key || ""} disabled={!!editingColumn} className="w-full border rounded p-2 text-sm font-mono focus:border-indigo-500 outline-none disabled:bg-slate-100 disabled:text-slate-500" placeholder="e.g., LaborRate" />
                   </div>
                 </div>
                 <div className="flex gap-3">
