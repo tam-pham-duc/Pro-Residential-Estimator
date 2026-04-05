@@ -6,7 +6,7 @@ import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY
 import { normalizeKey } from '@/services/formulaEngine';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable, ConditionalFormatRule, FullBackup } from '@/lib/types';
 import { 
-  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings, Variable,
+  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings, Variable, FileUp,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
   Undo2, Redo2, Copy, Users, Folder, BookOpen, Palette, LogIn, LogOut, User as UserIcon,
   Key, Check, AlertCircle, Edit, RefreshCw, Database, Shield, FileOutput, FileInput
@@ -5237,7 +5237,7 @@ export default function EstimatorApp() {
                   <table className="w-full text-left text-sm">
                     <thead className="bg-slate-50 sticky top-0">
                       <tr>
-                        <th className="p-2 border-b font-bold text-slate-600">Name</th>
+                        <th className="p-2 border-b font-bold text-slate-600">Name (Key)</th>
                         <th className="p-2 border-b font-bold text-slate-600">Value</th>
                         <th className="p-2 border-b font-bold text-slate-600 text-right">Actions</th>
                       </tr>
@@ -5245,7 +5245,10 @@ export default function EstimatorApp() {
                     <tbody>
                       {customVariables.map(v => (
                         <tr key={v.id} className="border-b last:border-0 hover:bg-slate-50">
-                          <td className="p-2 font-mono text-xs text-amber-700">[{v.name}]</td>
+                          <td className="p-2">
+                            <div className="font-bold text-slate-700 text-sm">{v.name}</div>
+                            <div className="font-mono text-[10px] text-amber-700">[{normalizeKey(v.name)}]</div>
+                          </td>
                           <td className="p-2 font-mono text-xs">
                             {v.formula && v.formula !== v.value.toString() ? (
                               <span title={`Formula: ${v.formula}`}>{v.value} <span className="text-slate-400 text-[10px]">(fx)</span></span>
@@ -6506,28 +6509,109 @@ export default function EstimatorApp() {
               <div className="w-1/4 border-r pr-4 overflow-y-auto">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-bold text-slate-700">Tables</h3>
-                  <button 
-                    onClick={() => {
-                      const name = window.prompt("Enter Table Name:");
-                      if (name) {
-                        const newTable: DataTable = {
-                          id: "DT-" + Date.now(),
-                          name,
-                          columns: [{ name: "ID", key: "id", type: "string" }],
-                          rows: []
+                  <div className="flex items-center gap-1">
+                    <label className="text-emerald-600 hover:text-emerald-700 cursor-pointer" title="Import New Table from CSV">
+                      <FileUp size={20} />
+                      <input type="file" className="hidden" accept=".csv" onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                          const text = event.target?.result as string;
+                          const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+                          if (lines.length < 1) return;
+                          
+                          const parseCSVLine = (line: string) => {
+                            const result = [];
+                            let current = '';
+                            let inQuotes = false;
+                            for (let i = 0; i < line.length; i++) {
+                              const char = line[i];
+                              if (char === '"') {
+                                if (inQuotes && line[i+1] === '"') { current += '"'; i++; } else { inQuotes = !inQuotes; }
+                              } else if (char === ',' && !inQuotes) {
+                                result.push(current);
+                                current = '';
+                              } else {
+                                current += char;
+                              }
+                            }
+                            result.push(current);
+                            return result;
+                          };
+
+                          const headers = parseCSVLine(lines[0]);
+                          const tableName = file.name.replace(/\.[^/.]+$/, "").replace(/_/g, " ");
+                          
+                          const newColumns = headers.map(h => {
+                            const name = h.trim() || "Column";
+                            const key = name.replace(/\s+/g, '_').toLowerCase();
+                            let type: 'string' | 'number' = 'string';
+                            if (lines.length > 1) {
+                              const firstRowVals = parseCSVLine(lines[1]);
+                              const valIndex = headers.indexOf(h);
+                              if (valIndex !== -1 && firstRowVals[valIndex]) {
+                                const num = Number(firstRowVals[valIndex]);
+                                if (!isNaN(num)) type = 'number';
+                              }
+                            }
+                            return { name, key, type };
+                          });
+
+                          const newRows = lines.slice(1).map(line => {
+                            const vals = parseCSVLine(line);
+                            const rowObj: Record<string, any> = {};
+                            newColumns.forEach((col, idx) => {
+                              if (idx < vals.length) {
+                                rowObj[col.key] = col.type === 'number' ? (parseFloat(vals[idx]) || 0) : vals[idx];
+                              } else {
+                                rowObj[col.key] = col.type === 'number' ? 0 : '';
+                              }
+                            });
+                            return rowObj;
+                          });
+
+                          const newTable: DataTable = {
+                            id: "DT-" + Date.now(),
+                            name: tableName,
+                            columns: newColumns,
+                            rows: newRows
+                          };
+
+                          const nextTables = [...dataTables, newTable];
+                          setDataTables(nextTables);
+                          setEditingDataTable(newTable);
+                          localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                          syncToFirestore('dataTables', newTable.id, newTable);
+                          recordHistory(`Imported new table ${tableName} from CSV`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
                         };
-                        const nextTables: DataTable[] = [...dataTables, newTable];
-                        setDataTables(nextTables);
-                        setEditingDataTable(newTable);
-                        localStorage.setItem('userDataTables', JSON.stringify(nextTables));
-                        syncToFirestore('dataTables', newTable.id, newTable);
-                        recordHistory(`Added data table ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
-                      }
-                    }}
-                    className="text-emerald-600 hover:text-emerald-700"
-                  >
-                    <Plus size={20} />
-                  </button>
+                        reader.readAsText(file);
+                        e.target.value = '';
+                      }} />
+                    </label>
+                    <button 
+                      onClick={() => {
+                        const name = window.prompt("Enter Table Name:");
+                        if (name) {
+                          const newTable: DataTable = {
+                            id: "DT-" + Date.now(),
+                            name,
+                            columns: [{ name: "ID", key: "id", type: "string" }],
+                            rows: []
+                          };
+                          const nextTables: DataTable[] = [...dataTables, newTable];
+                          setDataTables(nextTables);
+                          setEditingDataTable(newTable);
+                          localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                          syncToFirestore('dataTables', newTable.id, newTable);
+                          recordHistory(`Added data table ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                        }
+                      }}
+                      className="text-emerald-600 hover:text-emerald-700"
+                    >
+                      <Plus size={20} />
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   {dataTables.map(dt => (
@@ -6647,40 +6731,101 @@ export default function EstimatorApp() {
                         <thead className="bg-slate-50 sticky top-0 z-10">
                           <tr>
                             {editingDataTable.columns.map((col, idx) => (
-                              <th key={idx} className="border p-2 text-left font-bold text-slate-600 group">
-                                <div className="flex justify-between items-center">
-                                  <span>{col.name} <span className="text-[10px] font-normal text-slate-400">({col.type})</span></span>
-                                  {col.key !== 'id' && (
-                                    <button 
-                                      onClick={() => {
-                                        if (window.confirm(`Delete column ${col.name}?`)) {
-                                          const nextTables: DataTable[] = dataTables.map(t => {
-                                            if (t.id === editingDataTable.id) {
-                                              return { 
-                                                ...t, 
-                                                columns: t.columns.filter(c => c.key !== col.key),
-                                                rows: t.rows.map(r => {
+                              <th key={idx} className="border p-2 text-left font-bold text-slate-600 group min-w-[120px]">
+                                <div className="flex flex-col gap-1">
+                                  <div className="flex justify-between items-center">
+                                    <span className="truncate" title={col.name}>{col.name}</span>
+                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button 
+                                        onClick={() => {
+                                          const newName = window.prompt("Rename Column:", col.name);
+                                          if (newName && newName !== col.name) {
+                                            const newKey = newName.trim().replace(/\s+/g, '_').toLowerCase();
+                                            const nextTables: DataTable[] = dataTables.map(t => {
+                                              if (t.id === editingDataTable.id) {
+                                                const nextCols = t.columns.map(c => c.key === col.key ? { ...c, name: newName, key: newKey } : c);
+                                                const nextRows = t.rows.map(r => {
                                                   const newRow = { ...r };
+                                                  newRow[newKey] = r[col.key];
                                                   delete newRow[col.key];
                                                   return newRow;
-                                                })
-                                              };
+                                                });
+                                                return { ...t, columns: nextCols, rows: nextRows };
+                                              }
+                                              return t;
+                                            });
+                                            setDataTables(nextTables);
+                                            setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                            localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                            syncToFirestore('dataTables', editingDataTable.id, nextTables.find(t => t.id === editingDataTable.id)!);
+                                          }
+                                        }}
+                                        className="text-slate-400 hover:text-blue-500"
+                                        title="Rename Column"
+                                      >
+                                        <Edit2 size={10} />
+                                      </button>
+                                      {col.key !== 'id' && (
+                                        <button 
+                                          onClick={() => {
+                                            if (window.confirm(`Delete column ${col.name}?`)) {
+                                              const nextTables: DataTable[] = dataTables.map(t => {
+                                                if (t.id === editingDataTable.id) {
+                                                  return { 
+                                                    ...t, 
+                                                    columns: t.columns.filter(c => c.key !== col.key),
+                                                    rows: t.rows.map(r => {
+                                                      const newRow = { ...r };
+                                                      delete newRow[col.key];
+                                                      return newRow;
+                                                    })
+                                                  };
+                                                }
+                                                return t;
+                                              });
+                                              setDataTables(nextTables);
+                                              setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                              localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                              syncToFirestore('dataTables', editingDataTable.id, nextTables.find(t => t.id === editingDataTable.id)!);
                                             }
-                                            return t;
-                                          });
-                                          setDataTables(nextTables);
-                                          const updatedTable = nextTables.find(t => t.id === editingDataTable.id);
-                                          setEditingDataTable(updatedTable!);
-                                          localStorage.setItem('userDataTables', JSON.stringify(nextTables));
-                                          if (updatedTable) syncToFirestore('dataTables', editingDataTable.id, updatedTable);
-                                          recordHistory(`Deleted column ${col.name} from ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
-                                        }
+                                          }}
+                                          className="text-slate-400 hover:text-red-500"
+                                          title="Delete Column"
+                                        >
+                                          <Trash2 size={10} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px] font-normal text-slate-400">
+                                    <span className="font-mono">key: {col.key}</span>
+                                    <button 
+                                      onClick={() => {
+                                        const nextType = col.type === 'number' ? 'string' : 'number';
+                                        const nextTables: DataTable[] = dataTables.map(t => {
+                                          if (t.id === editingDataTable.id) {
+                                            const nextCols = t.columns.map(c => c.key === col.key ? { ...c, type: nextType as 'string' | 'number' } : c);
+                                            const nextRows = t.rows.map(r => {
+                                              const newRow = { ...r };
+                                              if (nextType === 'number') newRow[col.key] = parseFloat(r[col.key]) || 0;
+                                              else newRow[col.key] = String(r[col.key]);
+                                              return newRow;
+                                            });
+                                            return { ...t, columns: nextCols, rows: nextRows };
+                                          }
+                                          return t;
+                                        });
+                                        setDataTables(nextTables);
+                                        setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                        localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                        syncToFirestore('dataTables', editingDataTable.id, nextTables.find(t => t.id === editingDataTable.id)!);
                                       }}
-                                      className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      className="hover:text-amber-600 underline decoration-dotted"
+                                      title="Click to toggle type"
                                     >
-                                      <Trash2 size={12} />
+                                      {col.type}
                                     </button>
-                                  )}
+                                  </div>
                                 </div>
                               </th>
                             ))}
