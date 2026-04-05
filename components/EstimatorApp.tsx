@@ -310,6 +310,7 @@ export default function EstimatorApp() {
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [showSaveConfirmModal, setShowSaveConfirmModal] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [newDisplayName, setNewDisplayName] = useState("");
   const [profileUpdateStatus, setProfileUpdateStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
@@ -2091,11 +2092,21 @@ export default function EstimatorApp() {
     }
   };
 
-  const saveCurrentJob = async () => {
+  const saveCurrentJob = () => {
     if (!projectName) {
       alert("Please enter a Project Name before saving!");
       return;
     }
+
+    // If currentJobId is set and the job exists, ask for confirmation
+    if (currentJobId && savedJobs[currentJobId]) {
+      setShowSaveConfirmModal(true);
+    } else {
+      executeSaveJob();
+    }
+  };
+
+  const executeSaveJob = async () => {
     // Force recalculate all formulas to ensure saved data is fresh
     const { newData: freshTakeoffData } = recalculateAllFormulas(customVariables, entityData, true);
 
@@ -2117,11 +2128,12 @@ export default function EstimatorApp() {
       defaultOveragePct
     };
 
-    const newSavedJobs = { ...savedJobs, [currentJobId]: newJob };
+    const newSavedJobs = { ...savedJobs, [newJob.id]: newJob };
     setSavedJobs(newSavedJobs);
     localStorage.setItem('savedEstimatingJobs', JSON.stringify(newSavedJobs));
     alert("Job saved locally!");
     setLastAutoSaveTime(new Date().toLocaleString());
+    setShowSaveConfirmModal(false);
   };
 
   const saveAsTemplate = async () => {
@@ -6820,6 +6832,47 @@ export default function EstimatorApp() {
           </motion.div>
         </div>
       )}
+
+      {/* Save Confirmation Modal */}
+      <AnimatePresence>
+        {showSaveConfirmModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[110] p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6 border-b bg-amber-50">
+                <div className="flex items-center gap-3 text-amber-700 mb-2">
+                  <div className="p-2 bg-amber-100 rounded-lg">
+                    <AlertCircle size={24} />
+                  </div>
+                  <h2 className="text-xl font-bold">Confirm Overwrite</h2>
+                </div>
+                <p className="text-amber-600 text-sm">
+                  A job with this ID already exists. Are you sure you want to overwrite <strong>{savedJobs[currentJobId]?.projectName || 'this job'}</strong>?
+                </p>
+              </div>
+              
+              <div className="p-6 flex gap-3">
+                <button 
+                  onClick={() => setShowSaveConfirmModal(false)}
+                  className="flex-1 px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 font-medium transition"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={executeSaveJob}
+                  className="flex-1 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-500 font-medium shadow-sm transition"
+                >
+                  Overwrite Job
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Backup & Sync Modal */}
       <AnimatePresence>
