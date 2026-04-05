@@ -621,6 +621,25 @@ export default function EstimatorApp() {
     const mappings: Record<string, string> = {};
     const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
     
+    const levenshtein = (a: string, b: string) => {
+      if (a.length === 0) return b.length;
+      if (b.length === 0) return a.length;
+      const matrix = Array(a.length + 1).fill(null).map(() => Array(b.length + 1).fill(null));
+      for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+      for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+      for (let i = 1; i <= a.length; i++) {
+        for (let j = 1; j <= b.length; j++) {
+          const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+          matrix[i][j] = Math.min(
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1,
+            matrix[i - 1][j - 1] + indicator
+          );
+        }
+      }
+      return matrix[a.length][b.length];
+    };
+
     template.variables.forEach(v => {
       // 1. Check for built-in variables first
       const vLower = v.toLowerCase();
@@ -648,6 +667,7 @@ export default function EstimatorApp() {
       // Priority 4: Normalized name match + Global scope
       // Priority 5: Any exact name match
       // Priority 6: Any normalized name match
+      // Priority 7-9: Close matches (Levenshtein distance <= 2)
 
       const isRelevant = (info: any) => {
         if (!item) return info.scope === 'global';
@@ -663,6 +683,11 @@ export default function EstimatorApp() {
 
       const exactMatches = allVars.filter(([regKey]) => regKey.toLowerCase() === vLower);
       const normMatches = allVars.filter(([regKey]) => normalize(regKey) === vNorm);
+      
+      const closeMatches = allVars
+        .map(([regKey, info]) => ({ regKey, info, dist: levenshtein(vNorm, normalize(regKey)) }))
+        .filter(m => m.dist > 0 && m.dist <= 2)
+        .sort((a, b) => a.dist - b.dist);
 
       const bestExactRelevant = exactMatches.find(([_, info]) => isRelevant(info));
       if (bestExactRelevant) { mappings[v] = `[${bestExactRelevant[0]}]`; return; }
@@ -678,6 +703,14 @@ export default function EstimatorApp() {
 
       if (exactMatches.length > 0) { mappings[v] = `[${exactMatches[0][0]}]`; return; }
       if (normMatches.length > 0) { mappings[v] = `[${normMatches[0][0]}]`; return; }
+      
+      const bestCloseRelevant = closeMatches.find(m => isRelevant(m.info));
+      if (bestCloseRelevant) { mappings[v] = `[${bestCloseRelevant.regKey}]`; return; }
+
+      const bestCloseGlobal = closeMatches.find(m => m.info.scope === 'global');
+      if (bestCloseGlobal) { mappings[v] = `[${bestCloseGlobal.regKey}]`; return; }
+
+      if (closeMatches.length > 0) { mappings[v] = `[${closeMatches[0].regKey}]`; return; }
     });
     
     return mappings;
