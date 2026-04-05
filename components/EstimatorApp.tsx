@@ -257,6 +257,7 @@ export default function EstimatorApp() {
   const [historyIndex, setHistoryIndex] = useState(0);
   const [collapsedState, setCollapsedState] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState("");
+  const [bulkQtyInput, setBulkQtyInput] = useState("");
   const [projectName, setProjectName] = useState("");
   const [clientName, setClientName] = useState("");
   const [clients, setClients] = useState<Client[]>([]);
@@ -276,9 +277,15 @@ export default function EstimatorApp() {
   // Modals state
   const [qtyPanelOpen, setQtyPanelOpen] = useState(false);
   const [qtyPanelItemId, setQtyPanelItemId] = useState("");
-  const [qtyMode, setQtyMode] = useState<'auto' | 'manual' | 'guide'>('auto');
+  const [qtyMode, setQtyMode] = useState<'auto' | 'manual' | 'guide' | 'wizard'>('auto');
   const [customFormula, setCustomFormula] = useState("");
   const [manualQty, setManualQty] = useState("");
+  
+  // Wizard state
+  const [wizardWaste, setWizardWaste] = useState(false);
+  const [wizardRoundUp, setWizardRoundUp] = useState(false);
+  const [wizardMinimum, setWizardMinimum] = useState(false);
+  const [wizardMinQty, setWizardMinQty] = useState("10");
   const [customVariables, setCustomVariables] = useState<CustomVariable[]>([]);
   const [dynamicColumns, setDynamicColumns] = useState<DynamicColumn[]>([]);
   const [entityData, setEntityData] = useState<Record<string, Record<string, any>>>({});
@@ -292,6 +299,20 @@ export default function EstimatorApp() {
   
   const [mappingModalOpen, setMappingModalOpen] = useState(false);
   const [templateToApply, setTemplateToApply] = useState<FormulaTemplate | null>(null);
+  
+  const [guideSearch, setGuideSearch] = useState("");
+  const [expandedGuideSections, setExpandedGuideSections] = useState<Record<string, boolean>>({
+    'syntax': true,
+    'variables': true,
+    'dynamic': true,
+    'functions': true,
+    'logic': true,
+    'examples': true,
+  });
+
+  const toggleGuideSection = (section: string) => {
+    setExpandedGuideSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
   const [variableMappings, setVariableMappings] = useState<Record<string, string>>({});
   const [customVarModalOpen, setCustomVarModalOpen] = useState(false);
   const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
@@ -1018,12 +1039,28 @@ export default function EstimatorApp() {
     });
   };
 
+  const selectAllVisible = () => {
+    const q = searchQuery.toLowerCase();
+    const visibleIds = catalog
+      .filter(item => {
+        if (!q) return true;
+        return item.item_name.toLowerCase().includes(q) ||
+               item.category.toLowerCase().includes(q) ||
+               item.sub_category.toLowerCase().includes(q) ||
+               (item.sub_item_1 || "general").toLowerCase().includes(q);
+      })
+      .map(item => item.item_id);
+    
+    setSelectedItems(new Set(visibleIds));
+  };
+
   const setScopeForSelected = (inScope: boolean) => {
     if (selectedItems.size === 0) return;
     
     setTakeoffData(prev => {
       const newData = { ...prev };
       let changedCount = 0;
+      const updatedItemIds: string[] = [];
       
       selectedItems.forEach(itemId => {
         const item = catalog.find(i => i.item_id === itemId);
@@ -1062,11 +1099,72 @@ export default function EstimatorApp() {
             }
           }
           changedCount++;
+          updatedItemIds.push(itemId);
         }
       });
       
       if (changedCount > 0) {
-        setTimeout(() => recordHistory(`Marked ${changedCount} items as ${inScope ? 'In Scope' : 'Out of Scope'}`, newData, catalog, projectName, clientName), 0);
+        setTimeout(() => {
+          const sources = updatedItemIds.map(id => `Item:${id}`);
+          sources.push('BuiltIn:Take-off');
+          recalculateAffectedItems(sources);
+          recordHistory(`Marked ${changedCount} items as ${inScope ? 'In Scope' : 'Out of Scope'}`, newData, catalog, projectName, clientName);
+        }, 0);
+      }
+      return newData;
+    });
+  };
+
+  const setQtyForSelected = (qty: string) => {
+    if (selectedItems.size === 0) return;
+    
+    setTakeoffData(prev => {
+      const newData = { ...prev };
+      let changedCount = 0;
+      const updatedItemIds: string[] = [];
+      
+      selectedItems.forEach(itemId => {
+        const item = catalog.find(i => i.item_id === itemId);
+        if (!item) return;
+        
+        if (!newData[itemId]) {
+          let defaultOverage = "";
+          const match = item.calc_factor_instruction.match(/(\d+)%\s*overage/i);
+          if (match) defaultOverage = match[1];
+          newData[itemId] = {
+            in_scope: true, spec: "", qty: "", measured_qty: "",
+            overage_pct: defaultOverage, order_qty: "", evidence: "",
+            qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
+          };
+        }
+        
+        if (newData[itemId].qty !== qty || !newData[itemId].in_scope) {
+          newData[itemId] = { ...newData[itemId], qty: qty, in_scope: true };
+          
+          if (newData[itemId].qty_mode !== 'manual') {
+            const formula = newData[itemId].custom_formula || DEFAULT_QTY_FORMULA;
+            newData[itemId].measured_qty = evaluateCustomFormula(
+              formula,
+              newData[itemId].qty,
+              newData[itemId].overage_pct !== "" ? newData[itemId].overage_pct : defaultOveragePct,
+              newData[itemId].order_qty,
+              customVariables,
+              resolveDynamicScope(item),
+              dataTables
+            ).toString();
+          }
+          changedCount++;
+          updatedItemIds.push(itemId);
+        }
+      });
+      
+      if (changedCount > 0) {
+        setTimeout(() => {
+          const sources = updatedItemIds.map(id => `Item:${id}`);
+          sources.push('BuiltIn:Take-off');
+          recalculateAffectedItems(sources);
+          recordHistory(`Updated quantity to ${qty} for ${changedCount} items`, newData, catalog, projectName, clientName);
+        }, 0);
       }
       return newData;
     });
@@ -2191,7 +2289,7 @@ export default function EstimatorApp() {
         qty_mode: 'auto', custom_formula: DEFAULT_QTY_FORMULA
       };
       
-      const updatedMode = qtyMode === 'guide' ? currentMode : qtyMode;
+      const updatedMode = (qtyMode === 'guide' || qtyMode === 'wizard') ? currentMode : qtyMode;
       const updatedItem = { ...currentItem, custom_formula: customFormula, qty_mode: updatedMode };
       newData[qtyPanelItemId] = updatedItem;
       
@@ -2209,7 +2307,7 @@ export default function EstimatorApp() {
       const newData = { ...prev };
       const currentData = prev[qtyPanelItemId] || {};
       const currentMode = currentData.qty_mode || 'auto';
-      const updatedMode = qtyMode === 'guide' ? currentMode : qtyMode;
+      const updatedMode = (qtyMode === 'guide' || qtyMode === 'wizard') ? currentMode : qtyMode;
 
       const currentItem = newData[qtyPanelItemId] || {
         in_scope: false, spec: "", qty: "", measured_qty: "",
@@ -2444,18 +2542,27 @@ export default function EstimatorApp() {
             </div>
           </div>
           <div className="w-full md:flex-1 flex flex-col md:flex-row items-center justify-center gap-2">
-            <div className="relative w-full md:max-w-md">
-              <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
-              <input 
-                type="text" 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search anything..." 
-                className="w-full border border-slate-300 rounded-full pl-9 pr-4 py-2 text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
-              />
+            <div className="relative w-full md:max-w-md flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+                <input 
+                  type="text" 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search anything..." 
+                  className="w-full border border-slate-300 rounded-full pl-9 pr-4 py-2 text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none"
+                />
+              </div>
+              <button 
+                onClick={selectAllVisible}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-full text-xs font-bold transition-colors border border-slate-200 whitespace-nowrap"
+                title="Select all visible items"
+              >
+                Select All
+              </button>
             </div>
             {selectedItems.size > 0 && (
-              <div className="flex items-center justify-center gap-1 w-full md:w-auto mt-2 md:mt-0">
+              <div className="flex flex-wrap items-center justify-center gap-1 w-full md:w-auto mt-2 md:mt-0">
                 <button 
                   onClick={() => setScopeForSelected(true)}
                   className="bg-emerald-100 hover:bg-emerald-200 text-emerald-700 px-3 py-2 rounded-l-full text-sm font-bold flex items-center gap-1 whitespace-nowrap transition-colors border border-emerald-200"
@@ -2470,9 +2577,38 @@ export default function EstimatorApp() {
                 >
                   Exclude
                 </button>
+                
+                <div className="flex items-center ml-1 border border-slate-200 rounded-full overflow-hidden bg-white h-[38px]">
+                  <input
+                    type="number"
+                    placeholder="Qty"
+                    value={bulkQtyInput}
+                    onChange={(e) => setBulkQtyInput(e.target.value)}
+                    className="w-16 px-3 py-2 text-sm outline-none"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && bulkQtyInput) {
+                        setQtyForSelected(bulkQtyInput);
+                        setBulkQtyInput("");
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (bulkQtyInput) {
+                        setQtyForSelected(bulkQtyInput);
+                        setBulkQtyInput("");
+                      }
+                    }}
+                    className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-2 text-sm font-bold transition-colors border-l border-slate-200 h-full"
+                    title="Set quantity for selected items"
+                  >
+                    Set Qty
+                  </button>
+                </div>
+
                 <button 
                   onClick={() => setSelectedItems(new Set())}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-600 p-2 rounded-full text-sm font-bold transition-colors border border-slate-200 ml-1"
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-600 p-2 rounded-full text-sm font-bold transition-colors border border-slate-200 ml-1 h-[38px] w-[38px] flex items-center justify-center"
                   title="Clear selection"
                 >
                   <X size={16} />
@@ -4692,22 +4828,28 @@ export default function EstimatorApp() {
               </span>
             </div>
             
-            <div className="flex border-b mb-4">
+            <div className="flex border-b mb-4 overflow-x-auto">
               <button 
                 onClick={() => setQtyMode('auto')} 
-                className={`px-4 py-2 font-bold text-sm border-b-2 transition ${qtyMode === 'auto' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                className={`px-4 py-2 font-bold text-sm border-b-2 transition whitespace-nowrap ${qtyMode === 'auto' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
               >
                 ƒx Auto Formula
               </button>
               <button 
+                onClick={() => setQtyMode('wizard')} 
+                className={`px-4 py-2 font-bold text-sm border-b-2 transition whitespace-nowrap ${qtyMode === 'wizard' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+              >
+                ✨ Formula Builder
+              </button>
+              <button 
                 onClick={() => setQtyMode('manual')} 
-                className={`px-4 py-2 font-bold text-sm border-b-2 transition ${qtyMode === 'manual' ? 'border-amber-600 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                className={`px-4 py-2 font-bold text-sm border-b-2 transition whitespace-nowrap ${qtyMode === 'manual' ? 'border-amber-600 text-amber-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
               >
                 ✋ Manual Override
               </button>
               <button 
                 onClick={() => setQtyMode('guide')} 
-                className={`px-4 py-2 font-bold text-sm border-b-2 transition ${qtyMode === 'guide' ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                className={`px-4 py-2 font-bold text-sm border-b-2 transition whitespace-nowrap ${qtyMode === 'guide' ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
               >
                 📖 Formula Guide
               </button>
@@ -5018,6 +5160,100 @@ export default function EstimatorApp() {
                   );
                 })()}
               </div>
+            ) : qtyMode === 'wizard' ? (
+              <div className="space-y-6 max-h-[500px] overflow-y-auto pr-2">
+                <div className="bg-blue-50 border border-blue-200 p-4 rounded text-sm text-blue-800">
+                  <p className="font-bold mb-2 flex items-center gap-2">
+                    ✨ Formula Builder
+                  </p>
+                  <p>Answer a few questions to automatically generate a formula for this item.</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
+                    <h4 className="font-bold text-slate-700 mb-3">1. Add Waste/Overage?</h4>
+                    <div className="flex gap-4">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="wizWaste" checked={!wizardWaste} onChange={() => setWizardWaste(false)} className="text-blue-600" />
+                        <span className="text-sm">No Waste</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="wizWaste" checked={wizardWaste} onChange={() => setWizardWaste(true)} className="text-blue-600" />
+                        <span className="text-sm">Add Waste %</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
+                    <h4 className="font-bold text-slate-700 mb-3">2. Rounding</h4>
+                    <div className="flex flex-col gap-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="wizRound" checked={!wizardRoundUp} onChange={() => setWizardRoundUp(false)} className="text-blue-600" />
+                        <span className="text-sm">Exact Quantity (e.g. 10.5)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="wizRound" checked={wizardRoundUp} onChange={() => setWizardRoundUp(true)} className="text-blue-600" />
+                        <span className="text-sm">Round UP to full packages (e.g. 11)</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
+                    <h4 className="font-bold text-slate-700 mb-3">3. Minimum Quantity</h4>
+                    <div className="flex flex-col gap-3">
+                      <div className="flex gap-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="wizMin" checked={!wizardMinimum} onChange={() => setWizardMinimum(false)} className="text-blue-600" />
+                          <span className="text-sm">No Minimum</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="radio" name="wizMin" checked={wizardMinimum} onChange={() => setWizardMinimum(true)} className="text-blue-600" />
+                          <span className="text-sm">Set Minimum</span>
+                        </label>
+                      </div>
+                      {wizardMinimum && (
+                        <div className="pl-6 flex items-center gap-2">
+                          <span className="text-sm text-slate-600">Minimum amount:</span>
+                          <input 
+                            type="number" 
+                            value={wizardMinQty} 
+                            onChange={(e) => setWizardMinQty(e.target.value)}
+                            className="border rounded px-2 py-1 w-24 text-sm outline-none focus:border-blue-500"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-800 text-white p-4 rounded-lg shadow-inner mt-6">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase mb-2">Generated Formula</h4>
+                    <code className="text-lg font-mono text-emerald-400 block break-all">
+                      {(() => {
+                        let f = "[Take-off]";
+                        if (wizardWaste) f = `(${f} * (1 + [Overage %] / 100))`;
+                        if (wizardRoundUp) f = `ceil(${f} / [Order])`;
+                        if (wizardMinimum && wizardMinQty) f = `max(${wizardMinQty}, ${f})`;
+                        return f;
+                      })()}
+                    </code>
+                    <div className="mt-4 flex justify-end">
+                      <button 
+                        onClick={() => {
+                          let f = "[Take-off]";
+                          if (wizardWaste) f = `(${f} * (1 + [Overage %] / 100))`;
+                          if (wizardRoundUp) f = `ceil(${f} / [Order])`;
+                          if (wizardMinimum && wizardMinQty) f = `max(${wizardMinQty}, ${f})`;
+                          setCustomFormula(f);
+                          setQtyMode('auto');
+                        }}
+                        className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-bold transition shadow-sm"
+                      >
+                        Apply Formula
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             ) : qtyMode === 'manual' ? (
               <div className="space-y-4">
                 <div className="bg-amber-50 border border-amber-200 p-4 rounded text-sm text-amber-800">
@@ -5042,141 +5278,197 @@ export default function EstimatorApp() {
                   <p className="font-bold mb-2 flex items-center gap-2">
                     <BookOpen size={16} /> Formula Calculation Guide
                   </p>
-                  <p>Learn how to use the calculation engine to automate your take-offs.</p>
+                  <p>Learn how to use the calculation engine to automate your take-offs. The formula engine uses standard math, logic, and custom variables to calculate the final quantity for your materials.</p>
                 </div>
 
-                <div className="space-y-6">
-                  <section>
-                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">1. Basic Syntax</h4>
-                    <p className="text-xs text-slate-600 mb-2">Use standard mathematical operators and parentheses to group operations.</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
-                        <span className="font-mono font-bold text-indigo-600">+ - * / ^</span>
-                        <span className="ml-2 text-slate-500">Basic Operators</span>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
-                        <span className="font-mono font-bold text-indigo-600">( )</span>
-                        <span className="ml-2 text-slate-500">Parentheses</span>
-                      </div>
-                    </div>
-                  </section>
+                <div className="mb-4 relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Search size={14} className="text-slate-400" />
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Search variables, functions, examples..."
+                    value={guideSearch}
+                    onChange={(e) => setGuideSearch(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
 
-                  <section>
-                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">2. Built-in Variables</h4>
-                    <p className="text-xs text-slate-600 mb-2">These variables are automatically available for every material.</p>
-                    <div className="space-y-2">
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between">
-                        <code className="font-bold text-blue-700">[Take-off]</code>
-                        <span className="text-slate-500">The measured quantity from the main table.</span>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between">
-                        <code className="font-bold text-blue-700">[Overage %]</code>
-                        <span className="text-slate-500">The waste factor percentage (e.g., 10 for 10%).</span>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between">
-                        <code className="font-bold text-blue-700">[Order]</code>
-                        <span className="text-slate-500">The packaging or divisor value.</span>
-                      </div>
-                    </div>
-                  </section>
+                <div className="space-y-4">
+                  {/* Basic Syntax */}
+                  {(!guideSearch || "+ - * / ^ ( ) basic operators parentheses".includes(guideSearch.toLowerCase())) && (
+                    <section className="border rounded overflow-hidden">
+                      <button 
+                        onClick={() => toggleGuideSection('syntax')}
+                        className="w-full flex justify-between items-center bg-slate-50 p-3 text-sm font-bold text-slate-700 hover:bg-slate-100 transition"
+                      >
+                        <span>1. Basic Syntax</span>
+                        {expandedGuideSections['syntax'] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
+                      {expandedGuideSections['syntax'] && (
+                        <div className="p-3 bg-white border-t">
+                          <p className="text-xs text-slate-600 mb-2">Use standard mathematical operators and parentheses to group operations.</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="bg-slate-50 p-2 rounded border text-[11px]">
+                              <span className="font-mono font-bold text-indigo-600">+ - * / ^</span>
+                              <span className="ml-2 text-slate-500">Basic Operators</span>
+                            </div>
+                            <div className="bg-slate-50 p-2 rounded border text-[11px]">
+                              <span className="font-mono font-bold text-indigo-600">( )</span>
+                              <span className="ml-2 text-slate-500">Parentheses</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  )}
 
-                  <section>
-                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">3. Dynamic & Custom Variables</h4>
-                    <p className="text-xs text-slate-600 mb-2">Use variables from your custom columns or global variables.</p>
-                    <div className="bg-slate-50 p-3 rounded border text-[11px] space-y-2">
-                      <p>Variables must be enclosed in square brackets: <code className="bg-white px-1 border rounded text-indigo-600 font-bold">[MyVariable]</code></p>
-                      <p className="text-slate-500 italic">Note: Variable keys are case-sensitive and must match exactly.</p>
-                    </div>
-                  </section>
+                  {/* Built-in Variables */}
+                  {(!guideSearch || "[take-off] measured quantity [overage %] waste factor [order] packaging divisor".includes(guideSearch.toLowerCase())) && (
+                    <section className="border rounded overflow-hidden">
+                      <button 
+                        onClick={() => toggleGuideSection('variables')}
+                        className="w-full flex justify-between items-center bg-slate-50 p-3 text-sm font-bold text-slate-700 hover:bg-slate-100 transition"
+                      >
+                        <span>2. Built-in Variables</span>
+                        {expandedGuideSections['variables'] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
+                      {expandedGuideSections['variables'] && (
+                        <div className="p-3 bg-white border-t space-y-2">
+                          <p className="text-xs text-slate-600 mb-2">These variables are automatically available for every material.</p>
+                          {[
+                            { name: "[Take-off]", desc: "The measured quantity from the main table." },
+                            { name: "[Overage %]", desc: "The waste factor percentage (e.g., 10 for 10%)." },
+                            { name: "[Order]", desc: "The packaging or divisor value." }
+                          ].filter(v => !guideSearch || v.name.toLowerCase().includes(guideSearch.toLowerCase()) || v.desc.toLowerCase().includes(guideSearch.toLowerCase())).map((v, i) => (
+                            <div key={i} className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between">
+                              <code className="font-bold text-blue-700">{v.name}</code>
+                              <span className="text-slate-500">{v.desc}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )}
 
-                  <section>
-                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">4. Common Functions</h4>
-                    <p className="text-xs text-slate-600 mb-2">Use these functions for advanced rounding and logic.</p>
-                    <div className="grid grid-cols-1 gap-2">
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
-                        <div><code className="font-bold text-emerald-700">ceil(x)</code> <span className="text-slate-400 ml-1">Round up</span></div>
-                        <code className="text-slate-500">ceil(10.2) = 11</code>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
-                        <div><code className="font-bold text-emerald-700">floor(x)</code> <span className="text-slate-400 ml-1">Round down</span></div>
-                        <code className="text-slate-500">floor(10.8) = 10</code>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
-                        <div><code className="font-bold text-emerald-700">round(x, n)</code> <span className="text-slate-400 ml-1">Round to n decimals</span></div>
-                        <code className="text-slate-500">round(10.556, 2) = 10.56</code>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
-                        <div><code className="font-bold text-emerald-700">abs(x)</code> <span className="text-slate-400 ml-1">Absolute value</span></div>
-                        <code className="text-slate-500">abs(-5) = 5</code>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
-                        <div><code className="font-bold text-emerald-700">min(a, b, ...)</code> <span className="text-slate-400 ml-1">Minimum value</span></div>
-                        <code className="text-slate-500">min(5, 2, 8) = 2</code>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
-                        <div><code className="font-bold text-emerald-700">max(a, b, ...)</code> <span className="text-slate-400 ml-1">Maximum value</span></div>
-                        <code className="text-slate-500">max(5, 2, 8) = 8</code>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
-                        <div><code className="font-bold text-emerald-700">IF(cond, t, f)</code> <span className="text-slate-400 ml-1">Conditional logic</span></div>
-                        <code className="text-slate-500">IF(1 &gt; 0, 10, 5) = 10</code>
-                      </div>
-                    </div>
-                  </section>
+                  {/* Dynamic & Custom Variables */}
+                  {(!guideSearch || "dynamic custom variables [myvariable] square brackets case-sensitive".includes(guideSearch.toLowerCase())) && (
+                    <section className="border rounded overflow-hidden">
+                      <button 
+                        onClick={() => toggleGuideSection('dynamic')}
+                        className="w-full flex justify-between items-center bg-slate-50 p-3 text-sm font-bold text-slate-700 hover:bg-slate-100 transition"
+                      >
+                        <span>3. Dynamic & Custom Variables</span>
+                        {expandedGuideSections['dynamic'] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
+                      {expandedGuideSections['dynamic'] && (
+                        <div className="p-3 bg-white border-t">
+                          <p className="text-xs text-slate-600 mb-2">Use variables from your custom columns or global variables.</p>
+                          <div className="bg-slate-50 p-3 rounded border text-[11px] space-y-2">
+                            <p>Variables must be enclosed in square brackets: <code className="bg-white px-1 border rounded text-indigo-600 font-bold">[MyVariable]</code></p>
+                            <p className="text-slate-500 italic">Note: Variable keys are case-sensitive and must match exactly.</p>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  )}
 
-                  <section>
-                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">5. Logical Operators</h4>
-                    <p className="text-xs text-slate-600 mb-2">Use these inside IF functions to compare values.</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
-                        <span className="font-mono font-bold text-indigo-600">== !=</span>
-                        <span className="ml-2 text-slate-500">Equal / Not Equal</span>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
-                        <span className="font-mono font-bold text-indigo-600">&gt; &lt; &gt;= &lt;=</span>
-                        <span className="ml-2 text-slate-500">Comparisons</span>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
-                        <span className="font-mono font-bold text-indigo-600">and or not</span>
-                        <span className="ml-2 text-slate-500">Logical AND / OR / NOT</span>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded border text-[11px]">
-                        <span className="font-mono font-bold text-indigo-600">&amp;&amp; || !</span>
-                        <span className="ml-2 text-slate-500">Alternative Logic</span>
-                      </div>
-                    </div>
-                  </section>
+                  {/* Common Functions */}
+                  {(!guideSearch || "functions ceil floor round abs min max if lookup conditional logic absolute minimum maximum".includes(guideSearch.toLowerCase())) && (
+                    <section className="border rounded overflow-hidden">
+                      <button 
+                        onClick={() => toggleGuideSection('functions')}
+                        className="w-full flex justify-between items-center bg-slate-50 p-3 text-sm font-bold text-slate-700 hover:bg-slate-100 transition"
+                      >
+                        <span>4. Common Functions</span>
+                        {expandedGuideSections['functions'] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
+                      {expandedGuideSections['functions'] && (
+                        <div className="p-3 bg-white border-t">
+                          <p className="text-xs text-slate-600 mb-2">Use these functions for advanced rounding and logic.</p>
+                          <div className="grid grid-cols-1 gap-2">
+                            {[
+                              { name: "ceil(x)", desc: "Round up", example: "ceil(10.2) = 11" },
+                              { name: "floor(x)", desc: "Round down", example: "floor(10.8) = 10" },
+                              { name: "round(x, n)", desc: "Round to n decimals", example: "round(10.556, 2) = 10.56" },
+                              { name: "abs(x)", desc: "Absolute value", example: "abs(-5) = 5" },
+                              { name: "min(a, b, ...)", desc: "Minimum value", example: "min(5, 2, 8) = 2" },
+                              { name: "max(a, b, ...)", desc: "Maximum value", example: "max(5, 2, 8) = 8" },
+                              { name: "IF(cond, t, f)", desc: "Conditional logic", example: "IF(1 > 0, 10, 5) = 10" },
+                              { name: "LOOKUP(table, key, col)", desc: "Table lookup", example: "LOOKUP(\"Rates\", \"Labor\", \"Cost\")" }
+                            ].filter(v => !guideSearch || v.name.toLowerCase().includes(guideSearch.toLowerCase()) || v.desc.toLowerCase().includes(guideSearch.toLowerCase())).map((v, i) => (
+                              <div key={i} className="bg-slate-50 p-2 rounded border text-[11px] flex justify-between items-center">
+                                <div><code className="font-bold text-emerald-700">{v.name}</code> <span className="text-slate-400 ml-1">{v.desc}</span></div>
+                                <code className="text-slate-500">{v.example}</code>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  )}
 
-                  <section>
-                    <h4 className="text-sm font-bold text-slate-700 border-b pb-1 mb-2">6. Examples</h4>
-                    <div className="space-y-3">
-                      <div className="bg-slate-50 p-3 rounded border">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Standard with Overage</p>
-                        <code className="text-xs font-bold text-indigo-600 block mb-1">[Take-off] * (1 + [Overage %] / 100)</code>
-                        <p className="text-[10px] text-slate-500">Calculates take-off plus waste percentage.</p>
-                      </div>
-                      <div className="bg-slate-50 p-3 rounded border">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Rounding Up to Full Packages</p>
-                        <code className="text-xs font-bold text-indigo-600 block mb-1">ceil([Take-off] / [Order])</code>
-                        <p className="text-[10px] text-slate-500">Divides take-off by package size and rounds up to the next whole number.</p>
-                      </div>
-                      <div className="bg-slate-50 p-3 rounded border">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Complex Logic</p>
-                        <code className="text-xs font-bold text-indigo-600 block mb-1">max(10, [Take-off] * 1.1)</code>
-                        <p className="text-[10px] text-slate-500">Ensures a minimum of 10 units, or 110% of take-off, whichever is greater.</p>
-                      </div>
-                      <div className="bg-slate-50 p-3 rounded border">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Conditional Logic (IF)</p>
-                        <code className="text-xs font-bold text-indigo-600 block mb-1">IF([Take-off] &gt; 100, [Take-off] * 1.05, [Take-off] * 1.15)</code>
-                        <p className="text-[10px] text-slate-500">If take-off is over 100, add 5% waste, otherwise add 15% waste.</p>
-                      </div>
-                      <div className="bg-slate-50 p-3 rounded border">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Nested IF & Comparisons</p>
-                        <code className="text-xs font-bold text-indigo-600 block mb-1">IF([Category] == &quot;Lumber&quot;, [Take-off] * 1.1, [Take-off])</code>
-                        <p className="text-[10px] text-slate-500">Only add 10% waste if the item category is &quot;Lumber&quot;.</p>
-                      </div>
-                    </div>
-                  </section>
+                  {/* Logical Operators */}
+                  {(!guideSearch || "logical operators == != > < >= <= and or not && || ! equal comparisons".includes(guideSearch.toLowerCase())) && (
+                    <section className="border rounded overflow-hidden">
+                      <button 
+                        onClick={() => toggleGuideSection('logic')}
+                        className="w-full flex justify-between items-center bg-slate-50 p-3 text-sm font-bold text-slate-700 hover:bg-slate-100 transition"
+                      >
+                        <span>5. Logical Operators</span>
+                        {expandedGuideSections['logic'] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
+                      {expandedGuideSections['logic'] && (
+                        <div className="p-3 bg-white border-t">
+                          <p className="text-xs text-slate-600 mb-2">Use these inside IF functions to compare values.</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {[
+                              { name: "== !=", desc: "Equal / Not Equal" },
+                              { name: "> < >= <=", desc: "Comparisons" },
+                              { name: "and or not", desc: "Logical AND / OR / NOT" },
+                              { name: "&& || !", desc: "Alternative Logic" }
+                            ].filter(v => !guideSearch || v.name.toLowerCase().includes(guideSearch.toLowerCase()) || v.desc.toLowerCase().includes(guideSearch.toLowerCase())).map((v, i) => (
+                              <div key={i} className="bg-slate-50 p-2 rounded border text-[11px]">
+                                <span className="font-mono font-bold text-indigo-600">{v.name}</span>
+                                <span className="ml-2 text-slate-500">{v.desc}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  )}
+
+                  {/* Examples */}
+                  {(!guideSearch || "examples standard overage rounding minimums conditional logic nested if data table lookup".includes(guideSearch.toLowerCase())) && (
+                    <section className="border rounded overflow-hidden">
+                      <button 
+                        onClick={() => toggleGuideSection('examples')}
+                        className="w-full flex justify-between items-center bg-slate-50 p-3 text-sm font-bold text-slate-700 hover:bg-slate-100 transition"
+                      >
+                        <span>6. Examples</span>
+                        {expandedGuideSections['examples'] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
+                      {expandedGuideSections['examples'] && (
+                        <div className="p-3 bg-white border-t space-y-3">
+                          {[
+                            { name: "Standard with Overage", code: "[Take-off] * (1 + [Overage %] / 100)", desc: "Calculates the base take-off quantity and adds the specified waste percentage." },
+                            { name: "Rounding Up to Full Packages", code: "ceil([Take-off] / [Order])", desc: "Divides take-off by package size (Order) and rounds up to the next whole number. Useful for items sold in boxes or bundles." },
+                            { name: "Complex Logic (Minimums)", code: "max(10, [Take-off] * 1.1)", desc: "Ensures a minimum of 10 units, or 110% of take-off, whichever is greater. Good for minimum order quantities." },
+                            { name: "Conditional Logic (IF)", code: "IF([Take-off] > 100, [Take-off] * 1.05, [Take-off] * 1.15)", desc: "If take-off is over 100, add 5% waste, otherwise add 15% waste. Useful for tiered waste factors." },
+                            { name: "Nested IF & Comparisons", code: "IF([Category] == \"Lumber\", [Take-off] * 1.1, [Take-off])", desc: "Only add 10% waste if the item category is exactly \"Lumber\"." },
+                            { name: "Data Table Lookup", code: "[Take-off] * LOOKUP(\"LaborRates\", [ZipCode], \"HourlyRate\")", desc: "Multiplies the take-off by an hourly rate found in the \"LaborRates\" table, using the [ZipCode] variable to find the right row." }
+                          ].filter(v => !guideSearch || v.name.toLowerCase().includes(guideSearch.toLowerCase()) || v.desc.toLowerCase().includes(guideSearch.toLowerCase()) || v.code.toLowerCase().includes(guideSearch.toLowerCase())).map((v, i) => (
+                            <div key={i} className="bg-slate-50 p-3 rounded border">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">{v.name}</p>
+                              <code className="text-xs font-bold text-indigo-600 block mb-1">{v.code}</code>
+                              <p className="text-[10px] text-slate-500">{v.desc}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )}
                 </div>
               </div>
             )}
