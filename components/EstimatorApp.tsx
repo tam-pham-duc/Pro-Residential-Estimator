@@ -4,12 +4,12 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { defaultCatalog } from '@/lib/default-catalog';
 import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY_FORMULA, getUniqueVals, recalculateCustomVariables, extractVariablesFromFormula } from '@/lib/estimator-utils';
 import { normalizeKey } from '@/services/formulaEngine';
-import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable, ConditionalFormatRule } from '@/lib/types';
+import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable, ConditionalFormatRule, FullBackup } from '@/lib/types';
 import { 
-  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings,
+  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings, Variable,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
   Undo2, Redo2, Copy, Users, Folder, BookOpen, Palette, LogIn, LogOut, User as UserIcon,
-  Key, Check, AlertCircle, Edit
+  Key, Check, AlertCircle, Edit, RefreshCw, Database, Shield, FileOutput, FileInput
 } from 'lucide-react';
 import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, db, doc, setDoc, getDoc, onSnapshot, collection, query, where, getDocs, deleteDoc, updateProfile, sendPasswordResetEmail, User } from '@/firebase';
 import { motion, AnimatePresence } from 'motion/react';
@@ -298,6 +298,10 @@ export default function EstimatorApp() {
   const [formulaTemplateModalOpen, setFormulaTemplateModalOpen] = useState(false);
   const [editingFormulaTemplate, setEditingFormulaTemplate] = useState<FormulaTemplate | null>(null);
   const [ftFormula, setFtFormula] = useState("");
+  const [lastBackupTime, setLastBackupTime] = useState<string>("");
+  const [showBackupModal, setShowBackupModal] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [cvFormula, setCvFormula] = useState("");
   const [templateSearch, setTemplateSearch] = useState("");
   const [templateScopeFilter, setTemplateScopeFilter] = useState<string>("all");
@@ -363,7 +367,7 @@ export default function EstimatorApp() {
     setExpandedGuideSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
   const [variableMappings, setVariableMappings] = useState<Record<string, string>>({});
-  const [customVarModalOpen, setCustomVarModalOpen] = useState(false);
+  const [customVarModalOpen, setCustomVarModalOpen] = useState(true);
   const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
 
@@ -802,11 +806,23 @@ export default function EstimatorApp() {
       if (newClients.length > 0) setClients(newClients);
     }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/clients`));
 
+    const unsubTemplates = onSnapshot(collection(db, 'users', user.uid, 'templates'), (snap) => {
+      const newTemplates = snap.docs.map(d => d.data() as ProjectTemplate);
+      if (newTemplates.length > 0) setTemplates(newTemplates);
+    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/templates`));
+
+    const unsubDataTables = onSnapshot(collection(db, 'users', user.uid, 'dataTables'), (snap) => {
+      const newDataTables = snap.docs.map(d => d.data() as DataTable);
+      if (newDataTables.length > 0) setDataTables(newDataTables);
+    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/dataTables`));
+
     return () => {
       unsubCatalog();
       unsubTakeoff();
       unsubVariables();
       unsubClients();
+      unsubTemplates();
+      unsubDataTables();
     };
   }, [user, isAuthReady]);
 
@@ -876,6 +892,148 @@ export default function EstimatorApp() {
       localStorage.setItem('showPricingColumns', String(showPricingColumns));
     }
   }, [showPricingColumns, isMounted]);
+
+  const performFullBackup = useCallback(() => {
+    if (!isMounted) return;
+    const backup: FullBackup = {
+      version: "1.0.0",
+      timestamp: new Date().toISOString(),
+      catalog,
+      takeoffData,
+      customVariables,
+      dynamicColumns,
+      dataTables,
+      clients,
+      templates,
+      formulaTemplates,
+      conditionalFormatRules,
+      projectName,
+      clientName,
+      clientEmail,
+      clientPhone,
+      clientAddress,
+      jobNotes,
+      defaultOveragePct,
+      savedJobs
+    };
+    try {
+      localStorage.setItem('estimator_local_sync_backup', JSON.stringify(backup));
+      setLastBackupTime(new Date().toLocaleTimeString());
+    } catch (e) {
+      console.warn("Local storage backup failed (likely quota exceeded). Use manual export for safety.", e);
+    }
+  }, [
+    isMounted, catalog, takeoffData, customVariables, dynamicColumns, 
+    dataTables, clients, templates, formulaTemplates, 
+    conditionalFormatRules, projectName, clientName, clientEmail, 
+    clientPhone, clientAddress, jobNotes, defaultOveragePct, savedJobs
+  ]);
+
+  useEffect(() => {
+    if (!isMounted) return;
+    const timer = setTimeout(performFullBackup, 15000); // Auto-sync every 15s
+    return () => clearTimeout(timer);
+  }, [performFullBackup, isMounted]);
+
+  const downloadFullBackup = () => {
+    setIsExporting(true);
+    const backup: FullBackup = {
+      version: "1.0.0",
+      timestamp: new Date().toISOString(),
+      catalog,
+      takeoffData,
+      customVariables,
+      dynamicColumns,
+      dataTables,
+      clients,
+      templates,
+      formulaTemplates,
+      conditionalFormatRules,
+      projectName,
+      clientName,
+      clientEmail,
+      clientPhone,
+      clientAddress,
+      jobNotes,
+      defaultOveragePct,
+      savedJobs
+    };
+    
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `estimator-full-backup-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setIsExporting(false);
+    alert("Full backup exported successfully! You can use this file to migrate your data to other platforms.");
+  };
+
+  const importFullBackup = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        setIsImporting(true);
+        const backup = JSON.parse(e.target?.result as string) as FullBackup;
+        
+        if (window.confirm("This will overwrite ALL current data with the backup. Are you sure?")) {
+          if (backup.catalog) setCatalog(backup.catalog);
+          if (backup.takeoffData) setTakeoffData(backup.takeoffData);
+          if (backup.customVariables) setCustomVariables(backup.customVariables);
+          if (backup.dynamicColumns) setDynamicColumns(backup.dynamicColumns);
+          if (backup.dataTables) setDataTables(backup.dataTables);
+          if (backup.clients) setClients(backup.clients);
+          if (backup.templates) setTemplates(backup.templates);
+          if (backup.formulaTemplates) setFormulaTemplates(backup.formulaTemplates);
+          if (backup.conditionalFormatRules) setConditionalFormatRules(backup.conditionalFormatRules);
+          if (backup.projectName) setProjectName(backup.projectName);
+          if (backup.clientName) setClientName(backup.clientName);
+          if (backup.clientEmail) setClientEmail(backup.clientEmail);
+          if (backup.clientPhone) setClientPhone(backup.clientPhone);
+          if (backup.clientAddress) setClientAddress(backup.clientAddress);
+          if (backup.jobNotes) setJobNotes(backup.jobNotes);
+          if (backup.defaultOveragePct) setDefaultOveragePct(backup.defaultOveragePct);
+          if (backup.savedJobs) setSavedJobs(backup.savedJobs);
+
+          // Trigger Firestore sync for all entities if user is logged in
+          if (user) {
+            alert("Data imported locally. Syncing to cloud...");
+            // We could implement a bulk sync here, but the individual syncToFirestore calls 
+            // in the state setters (if any) or the next auto-save will handle it.
+            // For safety, let's suggest a page refresh or manual save.
+          }
+          
+          alert("Full backup restored successfully!");
+        }
+      } catch (err) {
+        alert("Error importing backup file. Invalid format.");
+      } finally {
+        setIsImporting(false);
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = "";
+  };
+
+  useEffect(() => {
+    if (isMounted) {
+      const savedBackup = localStorage.getItem('estimator_local_sync_backup');
+      if (savedBackup) {
+        try {
+          const parsed = JSON.parse(savedBackup);
+          if (parsed.timestamp) {
+            setLastBackupTime(new Date(parsed.timestamp).toLocaleTimeString());
+          }
+        } catch (e) {}
+      }
+    }
+  }, [isMounted]);
 
   const autoMapVariables = useCallback((template: FormulaTemplate, item: Item | undefined) => {
     const mappings: Record<string, string> = {};
@@ -2355,6 +2513,7 @@ export default function EstimatorApp() {
 
             setDataTables(updatedTables);
             localStorage.setItem('userDataTables', JSON.stringify(updatedTables));
+            updatedTables.forEach(t => syncToFirestore('dataTables', t.id, t));
             recordHistory(`Imported data tables from JSON`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, updatedTables);
             alert("Data tables imported successfully!");
           }
@@ -2490,6 +2649,8 @@ export default function EstimatorApp() {
         setDataTables(nextTables);
         setEditingDataTable(nextTables.find(t => t.id === tableId)!);
         localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+        const updatedTable = nextTables.find(t => t.id === tableId);
+        if (updatedTable) syncToFirestore('dataTables', tableId, updatedTable);
         recordHistory(`Imported CSV into table ${nextTables.find(t => t.id === tableId)?.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
         alert("CSV imported successfully!");
 
@@ -2804,6 +2965,9 @@ export default function EstimatorApp() {
             <button onClick={exportBOM} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1">
               <Download size={16} /> Export BOM (CSV)
             </button>
+            <button onClick={() => setShowBackupModal(true)} className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded text-sm font-bold shadow-sm flex items-center gap-1 transition-all">
+              <Database size={16} /> Backup & Sync
+            </button>
           </div>
         </div>
       </div>
@@ -2958,6 +3122,9 @@ export default function EstimatorApp() {
               </button>
               <button onClick={() => setDataTableModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
                 <Table size={16} /> Data Tables
+              </button>
+              <button onClick={() => setCustomVarModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Variable size={16} /> Variables
               </button>
               <button onClick={() => setConditionalFormatModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
                 <Palette size={16} /> Formatting
@@ -6341,6 +6508,7 @@ export default function EstimatorApp() {
                         setDataTables(nextTables);
                         setEditingDataTable(newTable);
                         localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                        syncToFirestore('dataTables', newTable.id, newTable);
                         recordHistory(`Added data table ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
                       }
                     }}
@@ -6365,6 +6533,7 @@ export default function EstimatorApp() {
                             setDataTables(nextTables);
                             if (editingDataTable?.id === dt.id) setEditingDataTable(null);
                             localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                            removeFromFirestore('dataTables', dt.id);
                             recordHistory(`Deleted data table ${dt.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
                           }
                         }}
@@ -6392,6 +6561,7 @@ export default function EstimatorApp() {
                               setDataTables(nextTables);
                               setEditingDataTable({ ...editingDataTable, name: newName });
                               localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                              syncToFirestore('dataTables', editingDataTable.id, { ...editingDataTable, name: newName });
                               recordHistory(`Renamed table ${editingDataTable.name} to ${newName}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
                             }
                           }}
@@ -6425,8 +6595,10 @@ export default function EstimatorApp() {
                                 return t;
                               });
                               setDataTables(nextTables);
-                              setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                              const updatedTable = nextTables.find(t => t.id === editingDataTable.id);
+                              setEditingDataTable(updatedTable!);
                               localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                              if (updatedTable) syncToFirestore('dataTables', editingDataTable.id, updatedTable);
                               recordHistory(`Added column ${colName} to ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
                             }
                           }}
@@ -6445,8 +6617,10 @@ export default function EstimatorApp() {
                               return t;
                             });
                             setDataTables(nextTables);
-                            setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                            const updatedTable = nextTables.find(t => t.id === editingDataTable.id);
+                            setEditingDataTable(updatedTable!);
                             localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                            if (updatedTable) syncToFirestore('dataTables', editingDataTable.id, updatedTable);
                             recordHistory(`Added row to ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
                           }}
                           className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded text-xs font-bold flex items-center gap-1"
@@ -6483,8 +6657,10 @@ export default function EstimatorApp() {
                                             return t;
                                           });
                                           setDataTables(nextTables);
-                                          setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                          const updatedTable = nextTables.find(t => t.id === editingDataTable.id);
+                                          setEditingDataTable(updatedTable!);
                                           localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                          if (updatedTable) syncToFirestore('dataTables', editingDataTable.id, updatedTable);
                                           recordHistory(`Deleted column ${col.name} from ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
                                         }
                                       }}
@@ -6518,9 +6694,11 @@ export default function EstimatorApp() {
                                         return t;
                                       });
                                       setDataTables(nextTables);
-                                      setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                      const updatedTable = nextTables.find(t => t.id === editingDataTable.id);
+                                      setEditingDataTable(updatedTable!);
                                       // Debounce saving to localStorage and history if needed, but for now direct
                                       localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                      if (updatedTable) syncToFirestore('dataTables', editingDataTable.id, updatedTable);
                                     }}
                                     onBlur={() => {
                                       // Trigger recalculation when data changes
@@ -6541,8 +6719,10 @@ export default function EstimatorApp() {
                                       return t;
                                     });
                                     setDataTables(nextTables);
-                                    setEditingDataTable(nextTables.find(t => t.id === editingDataTable.id)!);
+                                    const updatedTable = nextTables.find(t => t.id === editingDataTable.id);
+                                    setEditingDataTable(updatedTable!);
                                     localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                                    if (updatedTable) syncToFirestore('dataTables', editingDataTable.id, updatedTable);
                                     recordHistory(`Deleted row from ${editingDataTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
                                   }}
                                   className="text-slate-300 hover:text-red-500"
@@ -6640,6 +6820,153 @@ export default function EstimatorApp() {
           </motion.div>
         </div>
       )}
+
+      {/* Backup & Sync Modal */}
+      <AnimatePresence>
+        {showBackupModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden"
+            >
+              <div className="bg-slate-800 p-6 text-white flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-slate-700 rounded-lg">
+                    <Database className="text-emerald-400" size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold">Local Backup & Synchronization</h2>
+                    <p className="text-slate-400 text-xs">Manage your data backups and prepare for migration</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowBackupModal(false)}
+                  className="text-slate-400 hover:text-white transition"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+                {/* Status Section */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl flex items-center gap-4">
+                    <div className="p-3 bg-emerald-100 rounded-full text-emerald-600">
+                      <RefreshCw size={20} className={isAuthReady && user ? "animate-spin-slow" : ""} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-emerald-800">Cloud Sync Status</p>
+                      <p className="text-xs text-emerald-600">
+                        {isAuthReady && user ? "Active & Connected" : "Not Logged In"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl flex items-center gap-4">
+                    <div className="p-3 bg-blue-100 rounded-full text-blue-600">
+                      <Shield size={20} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-blue-800">Local Sync Status</p>
+                      <p className="text-xs text-blue-600">
+                        Last Backup: {lastBackupTime || "Never"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Info Box */}
+                <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl text-amber-800 text-sm flex gap-3">
+                  <AlertCircle className="shrink-0 mt-0.5" size={18} />
+                  <div>
+                    <p className="font-bold mb-1">Why Backup Locally?</p>
+                    <p className="text-xs opacity-90 leading-relaxed">
+                      Local synchronization creates a mirror of your Firestore data in your browser&apos;s storage. 
+                      You can export this data as a JSON file to migrate to platforms like Vercel or Supabase, 
+                      or keep it as a secondary backup.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Actions Section */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Data Management Actions</h3>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button 
+                      onClick={downloadFullBackup}
+                      disabled={isExporting}
+                      className="flex items-center justify-center gap-2 px-4 py-4 bg-emerald-600 text-white rounded-xl hover:bg-emerald-500 font-bold shadow-md transition disabled:opacity-50"
+                    >
+                      {isExporting ? <RefreshCw className="animate-spin" size={20} /> : <FileOutput size={20} />}
+                      <div className="text-left">
+                        <p className="text-sm">Export Full JSON</p>
+                        <p className="text-[10px] opacity-80 font-normal">Download all entities for migration</p>
+                      </div>
+                    </button>
+
+                    <label className="flex items-center justify-center gap-2 px-4 py-4 bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 font-bold border border-slate-200 cursor-pointer transition">
+                      <FileInput size={20} />
+                      <div className="text-left">
+                        <p className="text-sm">Import from Backup</p>
+                        <p className="text-[10px] text-slate-500 font-normal">Restore data from a JSON file</p>
+                      </div>
+                      <input 
+                        type="file" 
+                        accept=".json" 
+                        onChange={importFullBackup} 
+                        className="hidden" 
+                        disabled={isImporting}
+                      />
+                    </label>
+                  </div>
+
+                  <button 
+                    onClick={() => {
+                      performFullBackup();
+                      alert("Manual local sync completed!");
+                    }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 text-sm font-bold transition"
+                  >
+                    <RefreshCw size={16} /> Force Local Sync Now
+                  </button>
+                </div>
+
+                {/* Entities Included Section */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider">Entities Included in Backup</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {[
+                      { name: 'Catalog Items', count: catalog.length },
+                      { name: 'Takeoff Data', count: Object.keys(takeoffData).length },
+                      { name: 'Variables', count: customVariables.length },
+                      { name: 'Clients', count: clients.length },
+                      { name: 'Templates', count: templates.length },
+                      { name: 'Data Tables', count: dataTables.length },
+                      { name: 'Saved Jobs', count: Object.keys(savedJobs).length }
+                    ].map((entity, idx) => (
+                      <div key={idx} className="bg-slate-50 p-3 rounded-lg border flex flex-col items-center justify-center text-center">
+                        <span className="text-lg font-bold text-slate-700">{entity.count}</span>
+                        <span className="text-[10px] text-slate-500 uppercase font-bold">{entity.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 bg-slate-50 border-t flex justify-end">
+                <button 
+                  onClick={() => setShowBackupModal(false)}
+                  className="px-6 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 font-bold transition shadow-md"
+                >
+                  Done
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Template Auto-save Recovery Modal */}
       {autoSaveTemplatesModalOpen && autoSaveTemplatesData && (

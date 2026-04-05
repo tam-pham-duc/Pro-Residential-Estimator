@@ -130,3 +130,25 @@ export interface Client {
   address: string;
   notes: string;
 }
+
+export interface FullBackup {
+  version: string;
+  timestamp: string;
+  catalog: Item[];
+  takeoffData: Record<string, TakeoffItem>;
+  customVariables: CustomVariable[];
+  dynamicColumns: DynamicColumn[];
+  dataTables: DataTable[];
+  clients: Client[];
+  templates: ProjectTemplate[];
+  formulaTemplates: FormulaTemplate[];
+  conditionalFormatRules: ConditionalFormatRule[];
+  projectName: string;
+  clientName: string;
+  clientEmail: string;
+  clientPhone: string;
+  clientAddress: string;
+  jobNotes: string;
+  defaultOveragePct: string;
+  savedJobs: Record<string, Job>;
+}

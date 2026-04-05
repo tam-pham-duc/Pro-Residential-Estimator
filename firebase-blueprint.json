@@ -77,6 +77,18 @@
       },
       "required": ["id", "name"]
     },
+    "DataTable": {
+      "title": "Data Table",
+      "description": "A user-defined data table for labor rates, material pricing, etc.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "columns": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "key": { "type": "string" }, "type": { "type": "string" } } } },
+        "rows": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["id", "name"]
+    },
     "Template": {
       "title": "Template",
       "description": "A saved project template.",
@@ -116,6 +128,10 @@
     "/users/{userId}/templates/{templateId}": {
       "schema": "Template",
       "description": "Saved project templates."
+    },
+    "/users/{userId}/dataTables/{tableId}": {
+      "schema": "DataTable",
+      "description": "User's custom data tables."
     }
   }
 }
