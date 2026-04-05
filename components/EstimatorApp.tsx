@@ -612,6 +612,10 @@ export default function EstimatorApp() {
   };
 
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [showSaveTemplateForm, setShowSaveTemplateForm] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateDesc, setNewTemplateDesc] = useState("");
+  const [newTemplateType, setNewTemplateType] = useState<'global' | 'personal'>('personal');
   const [newProjectModalOpen, setNewProjectModalOpen] = useState(false);
   const [newProjectData, setNewProjectData] = useState({ name: '', client: '', description: '', templateId: '' });
 
@@ -1626,20 +1630,19 @@ export default function EstimatorApp() {
   };
 
   const saveAsTemplate = async () => {
-    const templateName = window.prompt("Enter template name:");
-    if (!templateName) return;
-    
-    const templateDesc = window.prompt("Enter template description (optional):") || "";
-    const isGlobal = window.confirm("Save as Global Template? (Cancel for Personal)");
+    if (!newTemplateName) {
+      alert("Please enter a template name.");
+      return;
+    }
 
     // Force recalculate all formulas to ensure saved data is fresh
     const { newData: freshTakeoffData } = recalculateAllFormulas(customVariables, entityData, true);
 
     const newTemplate: ProjectTemplate = {
       id: "TPL-" + Date.now(),
-      name: templateName,
-      description: templateDesc,
-      type: isGlobal ? 'global' : 'personal',
+      name: newTemplateName,
+      description: newTemplateDesc,
+      type: newTemplateType,
       catalog: catalog,
       takeoffData: freshTakeoffData,
       customVariables: customVariables,
@@ -1656,7 +1659,12 @@ export default function EstimatorApp() {
     const newTemplates = [...templates, newTemplate];
     setTemplates(newTemplates);
     localStorage.setItem('projectTemplates', JSON.stringify(newTemplates));
-    alert("Template saved locally!");
+    
+    // Reset form
+    setNewTemplateName("");
+    setNewTemplateDesc("");
+    setNewTemplateType("personal");
+    setShowSaveTemplateForm(false);
   };
 
   const createNewProject = () => {
@@ -2427,7 +2435,7 @@ export default function EstimatorApp() {
               <button onClick={saveCurrentJob} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1">
                 <Save size={16} /> Save
               </button>
-              <button onClick={saveAsTemplate} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
+              <button onClick={() => { setTemplateModalOpen(true); setShowSaveTemplateForm(true); }} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
                 <Save size={16} /> Save Template
               </button>
               <button onClick={() => setTemplateModalOpen(true)} className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-3 py-2 rounded text-sm font-bold flex items-center gap-1 whitespace-nowrap">
@@ -5192,22 +5200,27 @@ export default function EstimatorApp() {
                 <label className="block text-xs font-bold text-blue-800 mb-1">Category (L1)</label>
                 <div className="flex gap-2">
                   {!isNewCategory ? (
-                    <select 
-                      value={modCategory} 
-                      onChange={(e) => {
-                        if (e.target.value === '__NEW__') {
-                          setIsNewCategory(true);
-                          setModCategory("");
-                        } else {
-                          setModCategory(e.target.value);
-                          setModSubCategory("");
-                        }
-                      }} 
-                      className="w-full border p-2 rounded focus:border-blue-500 outline-none"
-                    >
-                      {getUniqueVals(catalog, 'category').map(c => <option key={c} value={c}>{c}</option>)}
-                      <option value="__NEW__" className="font-bold text-blue-600 bg-blue-50">+ Create New...</option>
-                    </select>
+                    <>
+                      <select 
+                        value={modCategory} 
+                        onChange={(e) => {
+                          if (e.target.value === '__NEW__') {
+                            setIsNewCategory(true);
+                            setModCategory("");
+                          } else {
+                            setModCategory(e.target.value);
+                            setModSubCategory("");
+                          }
+                        }} 
+                        className="w-full border p-2 rounded focus:border-blue-500 outline-none"
+                      >
+                        {getUniqueVals(catalog, 'category').map(c => <option key={c} value={c}>{c}</option>)}
+                        <option value="__NEW__" className="font-bold text-blue-600 bg-blue-50">+ Create New...</option>
+                      </select>
+                      <button onClick={() => { setIsNewCategory(true); setModCategory(""); }} className="px-3 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 font-bold whitespace-nowrap flex items-center justify-center" title="Add New Category">
+                        <Plus size={16} />
+                      </button>
+                    </>
                   ) : (
                     <>
                       <input 
@@ -5216,8 +5229,9 @@ export default function EstimatorApp() {
                         onChange={(e) => setModCategory(e.target.value)} 
                         className="w-full border border-blue-400 p-2 rounded focus:ring-2 focus:ring-blue-200 outline-none" 
                         autoFocus
+                        placeholder="Enter new category name..."
                       />
-                      <button onClick={() => { setIsNewCategory(false); setModCategory(getUniqueVals(catalog, 'category')[0] || ""); }} className="px-3 bg-slate-200 rounded hover:bg-slate-300"><X size={16}/></button>
+                      <button onClick={() => { setIsNewCategory(false); setModCategory(getUniqueVals(catalog, 'category')[0] || ""); }} className="px-3 bg-slate-200 rounded hover:bg-slate-300 flex items-center justify-center"><X size={16}/></button>
                     </>
                   )}
                 </div>
@@ -5227,22 +5241,27 @@ export default function EstimatorApp() {
                 <label className="block text-xs font-bold text-blue-800 mb-1">Sub-Category (L2)</label>
                 <div className="flex gap-2">
                   {!isNewSubCategory ? (
-                    <select 
-                      value={modSubCategory} 
-                      onChange={(e) => {
-                        if (e.target.value === '__NEW__') {
-                          setIsNewSubCategory(true);
-                          setModSubCategory("");
-                        } else {
-                          setModSubCategory(e.target.value);
-                          setModSubItem1("");
-                        }
-                      }} 
-                      className="w-full border p-2 rounded focus:border-blue-500 outline-none"
-                    >
-                      {getUniqueVals(catalog.filter(i => i.category === modCategory), 'sub_category').map(c => <option key={c} value={c}>{c}</option>)}
-                      <option value="__NEW__" className="font-bold text-blue-600 bg-blue-50">+ Create New...</option>
-                    </select>
+                    <>
+                      <select 
+                        value={modSubCategory} 
+                        onChange={(e) => {
+                          if (e.target.value === '__NEW__') {
+                            setIsNewSubCategory(true);
+                            setModSubCategory("");
+                          } else {
+                            setModSubCategory(e.target.value);
+                            setModSubItem1("");
+                          }
+                        }} 
+                        className="w-full border p-2 rounded focus:border-blue-500 outline-none"
+                      >
+                        {getUniqueVals(catalog.filter(i => i.category === modCategory), 'sub_category').map(c => <option key={c} value={c}>{c}</option>)}
+                        <option value="__NEW__" className="font-bold text-blue-600 bg-blue-50">+ Create New...</option>
+                      </select>
+                      <button onClick={() => { setIsNewSubCategory(true); setModSubCategory(""); }} className="px-3 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 font-bold whitespace-nowrap flex items-center justify-center" title="Add New Sub-Category">
+                        <Plus size={16} />
+                      </button>
+                    </>
                   ) : (
                     <>
                       <input 
@@ -5251,8 +5270,9 @@ export default function EstimatorApp() {
                         onChange={(e) => setModSubCategory(e.target.value)} 
                         className="w-full border border-blue-400 p-2 rounded focus:ring-2 focus:ring-blue-200 outline-none" 
                         autoFocus
+                        placeholder="Enter new sub-category name..."
                       />
-                      <button onClick={() => { setIsNewSubCategory(false); setModSubCategory(""); }} className="px-3 bg-slate-200 rounded hover:bg-slate-300"><X size={16}/></button>
+                      <button onClick={() => { setIsNewSubCategory(false); setModSubCategory(getUniqueVals(catalog.filter(i => i.category === modCategory), 'sub_category')[0] || ""); }} className="px-3 bg-slate-200 rounded hover:bg-slate-300 flex items-center justify-center"><X size={16}/></button>
                     </>
                   )}
                 </div>
@@ -5262,21 +5282,26 @@ export default function EstimatorApp() {
                 <label className="block text-xs font-bold text-emerald-800 mb-1">Sub-Item Group (L3)</label>
                 <div className="flex gap-2">
                   {!isNewSubItem1 ? (
-                    <select 
-                      value={modSubItem1} 
-                      onChange={(e) => {
-                        if (e.target.value === '__NEW__') {
-                          setIsNewSubItem1(true);
-                          setModSubItem1("");
-                        } else {
-                          setModSubItem1(e.target.value);
-                        }
-                      }} 
-                      className="w-full border p-2 rounded focus:border-emerald-500 outline-none"
-                    >
-                      {getUniqueVals(catalog.filter(i => i.category === modCategory && i.sub_category === modSubCategory), 'sub_item_1').map(c => <option key={c} value={c}>{c}</option>)}
-                      <option value="__NEW__" className="font-bold text-blue-600 bg-blue-50">+ Create New...</option>
-                    </select>
+                    <>
+                      <select 
+                        value={modSubItem1} 
+                        onChange={(e) => {
+                          if (e.target.value === '__NEW__') {
+                            setIsNewSubItem1(true);
+                            setModSubItem1("");
+                          } else {
+                            setModSubItem1(e.target.value);
+                          }
+                        }} 
+                        className="w-full border p-2 rounded focus:border-emerald-500 outline-none"
+                      >
+                        {getUniqueVals(catalog.filter(i => i.category === modCategory && i.sub_category === modSubCategory), 'sub_item_1').map(c => <option key={c} value={c}>{c}</option>)}
+                        <option value="__NEW__" className="font-bold text-blue-600 bg-blue-50">+ Create New...</option>
+                      </select>
+                      <button onClick={() => { setIsNewSubItem1(true); setModSubItem1(""); }} className="px-3 bg-emerald-100 text-emerald-700 rounded hover:bg-emerald-200 font-bold whitespace-nowrap flex items-center justify-center" title="Add New Sub-Item Group">
+                        <Plus size={16} />
+                      </button>
+                    </>
                   ) : (
                     <>
                       <input 
@@ -5285,8 +5310,9 @@ export default function EstimatorApp() {
                         onChange={(e) => setModSubItem1(e.target.value)} 
                         className="w-full border border-emerald-400 p-2 rounded focus:ring-2 focus:ring-emerald-200 outline-none" 
                         autoFocus
+                        placeholder="Enter new item group name..."
                       />
-                      <button onClick={() => { setIsNewSubItem1(false); setModSubItem1(""); }} className="px-3 bg-slate-200 rounded hover:bg-slate-300"><X size={16}/></button>
+                      <button onClick={() => { setIsNewSubItem1(false); setModSubItem1(getUniqueVals(catalog.filter(i => i.category === modCategory && i.sub_category === modSubCategory), 'sub_item_1')[0] || ""); }} className="px-3 bg-slate-200 rounded hover:bg-slate-300 flex items-center justify-center"><X size={16}/></button>
                     </>
                   )}
                 </div>
@@ -5437,11 +5463,66 @@ export default function EstimatorApp() {
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-3xl p-6 max-h-[80vh] flex flex-col">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold">Project Templates</h2>
-              <button onClick={() => setTemplateModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={24} />
-              </button>
+              <div className="flex items-center gap-4">
+                <button 
+                  onClick={() => setShowSaveTemplateForm(!showSaveTemplateForm)}
+                  className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 px-3 py-1.5 rounded text-sm font-bold transition flex items-center gap-2"
+                >
+                  <Plus size={16} /> {showSaveTemplateForm ? "Cancel Save" : "Save Current as Template"}
+                </button>
+                <button onClick={() => { setTemplateModalOpen(false); setShowSaveTemplateForm(false); }} className="text-slate-400 hover:text-slate-600">
+                  <X size={24} />
+                </button>
+              </div>
             </div>
             
+            {showSaveTemplateForm && (
+              <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-4 mb-4">
+                <h3 className="font-bold text-indigo-800 mb-3">Save Current Project as Template</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-bold text-indigo-700 mb-1">Template Name *</label>
+                    <input 
+                      type="text" 
+                      value={newTemplateName}
+                      onChange={(e) => setNewTemplateName(e.target.value)}
+                      className="w-full border border-indigo-200 rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="e.g., Standard Kitchen Remodel"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-indigo-700 mb-1">Type</label>
+                    <select 
+                      value={newTemplateType}
+                      onChange={(e) => setNewTemplateType(e.target.value as 'global' | 'personal')}
+                      className="w-full border border-indigo-200 rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                    >
+                      <option value="personal">Personal (Only for you)</option>
+                      <option value="global">Global (Available to all)</option>
+                    </select>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-bold text-indigo-700 mb-1">Description</label>
+                    <input 
+                      type="text" 
+                      value={newTemplateDesc}
+                      onChange={(e) => setNewTemplateDesc(e.target.value)}
+                      className="w-full border border-indigo-200 rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none"
+                      placeholder="Briefly describe what this template includes..."
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button 
+                    onClick={saveAsTemplate}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded font-bold transition shadow-sm flex items-center gap-2"
+                  >
+                    <Save size={16} /> Save Template
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="overflow-y-auto flex-1 border rounded p-4 bg-slate-50">
               {templates.length === 0 ? (
                 <div className="text-center py-8 text-slate-500">
