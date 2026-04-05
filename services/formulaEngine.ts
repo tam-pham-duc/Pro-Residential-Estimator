@@ -99,36 +99,64 @@ export function parseFormula(formula: string): string {
   return parsedFormula;
 }
 
+export const FormulaLogger = {
+  isDebugEnabled(localDebugFlag: boolean = false): boolean {
+    if (localDebugFlag) return true;
+    if (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_DEBUG_FORMULA === 'true') return true;
+    if (typeof window === 'undefined') return false;
+    return (window as any).DEBUG_FORMULA === true || window.localStorage?.getItem('DEBUG_FORMULA') === 'true';
+  },
+
+  debug(formula: string, parsedFormula: string, args: string[], context: Record<string, any>, result: any, localDebugFlag: boolean = false) {
+    if (!this.isDebugEnabled(localDebugFlag)) return;
+    console.group(`[Formula Engine Debug] Evaluating: ${formula}`);
+    console.log("Original Formula:", formula);
+    console.log("Parsed Formula:", parsedFormula);
+    console.log("Parsed Variables (Args):", args);
+    console.log("Context Object:", { ...context });
+    console.log("Result:", result);
+    console.groupEnd();
+  },
+
+  error(error: any, formula: string, context: Record<string, any>) {
+    console.error("[Formula Engine Error]", error, "Formula:", formula, "Context:", context);
+  }
+};
+
 export function evaluateFormula(formula: string, context: Record<string, any>, debug: boolean = false) {
   if (!formula) return 0;
   
   try {
     const parsedFormula = parseFormula(formula);
+    
+    // Basic security check to prevent access to global objects
+    const forbiddenKeywords = ['window', 'document', 'process', 'require', 'eval', 'console', 'global', 'setTimeout', 'setInterval', 'fetch', 'XMLHttpRequest'];
+    if (forbiddenKeywords.some(keyword => parsedFormula.includes(keyword))) {
+      throw new Error("Formula contains forbidden keywords");
+    }
+
     const args = Object.keys(context);
     const values = Object.values(context);
 
-    // Check if debug is enabled globally or via parameter
-    const isDebugEnabled = debug || (typeof window !== 'undefined' && (window as any).DEBUG_FORMULA === true) || (typeof window !== 'undefined' && window.localStorage?.getItem('DEBUG_FORMULA') === 'true');
-
-    if (isDebugEnabled) {
-      console.group(`[Formula Engine Debug] Evaluating: ${formula}`);
-      console.log("Original Formula:", formula);
-      console.log("Parsed Formula:", parsedFormula);
-      console.log("Parsed Variables (Args):", args);
-      console.log("Context Object:", { ...context });
-      console.groupEnd();
-    }
-
     // Create a safe function
-    const fn = new Function(...args, `return ${parsedFormula};`);
-    const result = fn(...values);
+    const fn = new Function(...args, `"use strict"; return (${parsedFormula});`);
+    let result = fn(...values);
     
+    // Handle various data types gracefully
     if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
-      return result;
+      // result is a valid number
+    } else if (typeof result === 'boolean' || typeof result === 'string') {
+      // result is a valid boolean or string
+    } else {
+      // Fallback for undefined, null, objects, arrays, NaN, Infinity
+      result = result !== undefined && result !== null ? result : 0;
     }
-    return result || 0;
+
+    FormulaLogger.debug(formula, parsedFormula, args, context, result, debug);
+
+    return result;
   } catch (error) {
-    console.error("Formula error:", error, "Formula:", formula, "Context:", context);
+    FormulaLogger.error(error, formula, context);
     return "ERR";
   }
 }
@@ -138,10 +166,17 @@ export function validateFormula(formula: string, context: Record<string, any>): 
   
   try {
     const parsedFormula = parseFormula(formula);
+    
+    // Basic security check
+    const forbiddenKeywords = ['window', 'document', 'process', 'require', 'eval', 'console', 'global', 'setTimeout', 'setInterval', 'fetch', 'XMLHttpRequest'];
+    if (forbiddenKeywords.some(keyword => parsedFormula.includes(keyword))) {
+      return { isValid: false, error: "Formula contains forbidden keywords" };
+    }
+
     const args = Object.keys(context);
     const values = Object.values(context).map(v => typeof v === 'function' ? v : 1); // Use 1 for all variables to test
 
-    const fn = new Function(...args, `return ${parsedFormula};`);
+    const fn = new Function(...args, `"use strict"; return (${parsedFormula});`);
     fn(...values);
     return { isValid: true };
   } catch (error: any) {

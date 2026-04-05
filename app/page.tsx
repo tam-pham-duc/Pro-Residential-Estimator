@@ -1,6 +1,11 @@
 "use client";
 
-import EstimatorApp from "@/components/EstimatorApp";
+import dynamic from "next/dynamic";
+
+const EstimatorApp = dynamic(() => import("@/components/EstimatorApp"), {
+  ssr: false,
+  loading: () => <p className="text-slate-500">Loading application...</p>
+});
 
 export default function Home() {
   return (
