@@ -1771,7 +1771,7 @@ function EstimatorAppContent() {
     return map;
   }, [formulasHash]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const recalculateAffectedItems = useCallback((changedSources: string[], currentVars: CustomVariable[] = customVariables, currentEntityData: Record<string, Record<string, any>> = entityData, currentTakeoffData: Record<string, TakeoffItem> = takeoffData, currentDataTables: DataTable[] = dataTables) => {
+  const performRecalculation = useCallback((changedSources: string[], currentVars: CustomVariable[] = customVariables, currentEntityData: Record<string, Record<string, any>> = entityData, currentTakeoffData: Record<string, TakeoffItem> = takeoffData, currentDataTables: DataTable[] = dataTables) => {
     const affectedItems = new Set<string>();
     const affectedVars = new Set<string>();
     
@@ -1818,7 +1818,6 @@ function EstimatorAppContent() {
     let newVars = currentVars;
     if (affectedVars.size > 0) {
       newVars = recalculateCustomVariables(currentVars);
-      setCustomVariables(newVars);
     }
     
     const newData = { ...currentTakeoffData };
@@ -1849,12 +1848,19 @@ function EstimatorAppContent() {
       }
     });
     
+    return { newData, hasChanges, newVars };
+  }, [dependencyMap, catalog, defaultOveragePct, dynamicColumns, resolveDynamicScope]);
+
+  const recalculateAffectedItems = useCallback((changedSources: string[]) => {
+    const { newData, hasChanges, newVars } = performRecalculation(changedSources);
     if (hasChanges) {
       setTakeoffData(newData);
     }
-    
+    if (newVars !== customVariables) {
+      setCustomVariables(newVars);
+    }
     return { newData, hasChanges, newVars };
-  }, [dependencyMap, customVariables, takeoffData, catalog, defaultOveragePct, entityData, dynamicColumns, resolveDynamicScope, dataTables]);
+  }, [performRecalculation, customVariables]);
 
   const handleDefaultOverageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -2005,11 +2011,15 @@ function EstimatorAppContent() {
 
       if (['qty', 'overage_pct', 'order_qty'].includes(field) || (field === 'in_scope' && finalValue)) {
         const source = field === 'qty' ? 'BuiltIn:Take-off' : (field === 'overage_pct' ? 'BuiltIn:Overage %' : (field === 'order_qty' ? 'BuiltIn:Order' : ''));
-        setTimeout(() => {
-          const sources = [`Item:${itemId}`];
-          if (source) sources.push(source);
-          recalculateAffectedItems(sources);
-        }, 0);
+        const sources = [`Item:${itemId}`];
+        if (source) sources.push(source);
+        
+        // Synchronous recalculation for real-time updates
+        const { newData: finalData, newVars } = performRecalculation(sources, customVariables, entityData, newData, dataTables);
+        if (newVars !== customVariables) {
+          setCustomVariables(newVars);
+        }
+        return finalData;
       }
 
       const actionDesc = field === 'in_scope' 

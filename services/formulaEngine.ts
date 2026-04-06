@@ -30,7 +30,7 @@ export function buildContext(
   context['qty'] = parseFloat(row.qty) || 0;
   context['overagePct'] = parseFloat(row.overage_pct) || 0;
   context['overage'] = parseFloat(row.overage_pct) || 0;
-  context['orderQty'] = parseFloat(row.order_qty) || 0;
+  context['orderQty'] = parseFloat(row.order_qty) || 1;
   context['takeOff'] = parseFloat(row.takeoff) || 0;
 
   // Add columns
