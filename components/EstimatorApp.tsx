@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, db, doc, setDoc, getDoc, onSnapshot, collection, query, where, getDocs, deleteDoc, updateProfile, sendPasswordResetEmail, User } from '@/firebase';
 import { motion, AnimatePresence } from 'motion/react';
+import Papa from 'papaparse';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
@@ -50,6 +51,25 @@ const formulaHighlightPlugin = ViewPlugin.fromClass(class {
 }, {
   decorations: v => v.decorations
 });
+
+const levenshtein = (a: string, b: string) => {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = Array(a.length + 1).fill(null).map(() => Array(b.length + 1).fill(null));
+  for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j] + 1,
+        matrix[i - 1][j - 1] + indicator
+      );
+    }
+  }
+  return matrix[a.length][b.length];
+};
 
 const getFormulaCompletions = (customVars: CustomVariable[], dynamicCols: DynamicColumn[], dataTables: DataTable[], item: Item | undefined) => (context: CompletionContext): CompletionResult | null => {
   // Check if we are inside LOOKUP(
@@ -1248,25 +1268,6 @@ function EstimatorAppContent() {
     const mappings: Record<string, string> = {};
     const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
     
-    const levenshtein = (a: string, b: string) => {
-      if (a.length === 0) return b.length;
-      if (b.length === 0) return a.length;
-      const matrix = Array(a.length + 1).fill(null).map(() => Array(b.length + 1).fill(null));
-      for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
-      for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-      for (let i = 1; i <= a.length; i++) {
-        for (let j = 1; j <= b.length; j++) {
-          const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
-          matrix[i][j] = Math.min(
-            matrix[i][j - 1] + 1,
-            matrix[i - 1][j] + 1,
-            matrix[i - 1][j - 1] + indicator
-          );
-        }
-      }
-      return matrix[a.length][b.length];
-    };
-
     template.variables.forEach(v => {
       // 1. Check for built-in variables first
       const vLower = v.toLowerCase();
@@ -2571,7 +2572,7 @@ function EstimatorAppContent() {
     if (bomExportOptions.includeReference) headers.push("REFERENCE");
     headers.push("Rule / Note");
 
-    let csvContent = headers.join(",") + "\n";
+    const rows = [];
     let hasItems = false;
 
     for (const [itemId, data] of Object.entries(freshTakeoffData)) {
@@ -2581,26 +2582,25 @@ function EstimatorAppContent() {
         const itemInfo = catalog.find(i => i.item_id === itemId);
         if (!itemInfo) continue;
 
-        const escapeCSV = (text: string) => `"${(text || '').toString().replace(/"/g, '""')}"`;
         const fullNotes = itemInfo.calc_factor_instruction + (itemInfo.notes ? " | Note: " + itemInfo.notes : "");
         
         const row = [
-          escapeCSV(itemInfo.category),
-          escapeCSV(itemInfo.sub_category),
-          escapeCSV(itemInfo.sub_item_1 || "General"),
-          escapeCSV(itemInfo.item_name)
+          itemInfo.category,
+          itemInfo.sub_category,
+          itemInfo.sub_item_1 || "General",
+          itemInfo.item_name
         ];
         
-        if (bomExportOptions.includeSpec) row.push(escapeCSV(data.spec));
-        row.push(escapeCSV(data.qty));
-        if (bomExportOptions.includeOveragePct) row.push(escapeCSV(data.overage_pct));
-        if (bomExportOptions.includeOrderQty) row.push(escapeCSV(data.order_qty));
-        row.push(escapeCSV(data.measured_qty));
-        row.push(escapeCSV(itemInfo.uom));
-        if (bomExportOptions.includeReference) row.push(escapeCSV(data.evidence));
-        row.push(escapeCSV(fullNotes));
+        if (bomExportOptions.includeSpec) row.push(data.spec);
+        row.push(data.qty);
+        if (bomExportOptions.includeOveragePct) row.push(data.overage_pct);
+        if (bomExportOptions.includeOrderQty) row.push(data.order_qty);
+        row.push(data.measured_qty);
+        row.push(itemInfo.uom);
+        if (bomExportOptions.includeReference) row.push(data.evidence);
+        row.push(fullNotes);
 
-        csvContent += row.join(",") + "\n";
+        rows.push(row);
       }
     }
 
@@ -2609,6 +2609,7 @@ function EstimatorAppContent() {
       return;
     }
 
+    const csvContent = Papa.unparse([headers, ...rows]);
     const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -2834,18 +2835,12 @@ function EstimatorAppContent() {
   const exportDataTableCSV = (table: DataTable) => {
     if (!table) return;
     
-    // Header row
-    const headers = table.columns.map(c => `"${c.name.replace(/"/g, '""')}"`).join(',');
-    
-    // Data rows
+    const headers = table.columns.map(c => c.name);
     const rows = table.rows.map(row => {
-      return table.columns.map(c => {
-        const val = row[c.key] !== undefined && row[c.key] !== null ? String(row[c.key]) : '';
-        return `"${val.replace(/"/g, '""')}"`;
-      }).join(',');
+      return table.columns.map(c => row[c.key] !== undefined && row[c.key] !== null ? row[c.key] : '');
     });
     
-    const csvContent = [headers, ...rows].join('\n');
+    const csvContent = Papa.unparse([headers, ...rows]);
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -2861,108 +2856,97 @@ function EstimatorAppContent() {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const text = e.target?.result as string;
-        const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
-        if (lines.length < 1) {
-          alert("CSV file is empty.");
-          return;
-        }
-
-        const parseCSVLine = (line: string) => {
-          const result = [];
-          let current = '';
-          let inQuotes = false;
-          for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            if (char === '"') {
-              if (inQuotes && line[i+1] === '"') {
-                current += '"';
-                i++;
-              } else {
-                inQuotes = !inQuotes;
-              }
-            } else if (char === ',' && !inQuotes) {
-              result.push(current);
-              current = '';
-            } else {
-              current += char;
-            }
+    Papa.parse(file, {
+      complete: (results) => {
+        try {
+          const data = results.data as string[][];
+          if (data.length < 1) {
+            alert("CSV file is empty.");
+            return;
           }
-          result.push(current);
-          return result;
-        };
 
-        const headers = parseCSVLine(lines[0]);
-        const replaceColumns = window.confirm("Do you want to replace existing columns with the CSV headers? (Cancel will only import rows matching existing columns)");
+          const headers = data[0];
+          const rows = data.slice(1).filter(row => row.length > 0 && row.some(cell => cell.trim() !== ''));
+          
+          const replaceColumns = window.confirm("Do you want to replace existing columns with the CSV headers? (Cancel will only import rows matching existing columns)");
 
-        let newColumns = [...(dataTables.find(t => t.id === tableId)?.columns || [])];
-        
-        if (replaceColumns) {
-          newColumns = headers.map(h => {
-            const name = h.trim();
-            const key = name.replace(/\s+/g, '_');
-            let type: 'string' | 'number' = 'string';
-            if (lines.length > 1) {
-              const firstRowVals = parseCSVLine(lines[1]);
-              const valIndex = headers.indexOf(h);
-              if (valIndex !== -1 && firstRowVals[valIndex]) {
-                const num = Number(firstRowVals[valIndex]);
-                if (!isNaN(num)) type = 'number';
-              }
-            }
-            return { name, key, type };
-          });
-        }
-
-        const newRows = lines.slice(1).map(line => {
-          const vals = parseCSVLine(line);
-          const rowObj: Record<string, any> = {};
+          let newColumns = [...(dataTables.find(t => t.id === tableId)?.columns || [])];
           
           if (replaceColumns) {
-            newColumns.forEach((col, idx) => {
-              if (idx < vals.length) {
-                rowObj[col.key] = col.type === 'number' ? (parseFloat(vals[idx]) || 0) : vals[idx];
-              } else {
-                rowObj[col.key] = col.type === 'number' ? 0 : '';
+            newColumns = headers.map((h, idx) => {
+              const name = h.trim() || `Column ${idx + 1}`;
+              const key = name.replace(/\s+/g, '_').toLowerCase();
+              let type: 'string' | 'number' = 'string';
+              
+              // Try to infer type from the first few rows
+              for (let i = 0; i < Math.min(rows.length, 5); i++) {
+                const val = rows[i][idx];
+                if (val && val.trim() !== '') {
+                  const num = Number(val.trim());
+                  if (!isNaN(num)) {
+                    type = 'number';
+                    break;
+                  }
+                }
               }
-            });
-          } else {
-            newColumns.forEach(col => {
-              const headerIdx = headers.findIndex(h => h.trim().toLowerCase() === col.name.toLowerCase() || h.trim().toLowerCase() === col.key.toLowerCase());
-              if (headerIdx !== -1 && headerIdx < vals.length) {
-                rowObj[col.key] = col.type === 'number' ? (parseFloat(vals[headerIdx]) || 0) : vals[headerIdx];
-              } else {
-                rowObj[col.key] = col.type === 'number' ? 0 : '';
-              }
+              return { name, key, type };
             });
           }
-          return rowObj;
-        });
 
-        const nextTables = dataTables.map(t => {
-          if (t.id === tableId) {
-            return { ...t, columns: newColumns, rows: replaceColumns ? newRows : [...t.rows, ...newRows] };
+          const newRows = rows.map(vals => {
+            const rowObj: Record<string, any> = {};
+            
+            if (replaceColumns) {
+              newColumns.forEach((col, idx) => {
+                if (idx < vals.length) {
+                  const val = vals[idx].trim();
+                  rowObj[col.key] = col.type === 'number' ? (parseFloat(val) || 0) : val;
+                } else {
+                  rowObj[col.key] = col.type === 'number' ? 0 : '';
+                }
+              });
+            } else {
+              newColumns.forEach(col => {
+                const headerIdx = headers.findIndex(h => h.trim().toLowerCase() === col.name.toLowerCase() || h.trim().toLowerCase() === col.key.toLowerCase());
+                if (headerIdx !== -1 && headerIdx < vals.length) {
+                  const val = vals[headerIdx].trim();
+                  rowObj[col.key] = col.type === 'number' ? (parseFloat(val) || 0) : val;
+                } else {
+                  rowObj[col.key] = col.type === 'number' ? 0 : '';
+                }
+              });
+            }
+            return rowObj;
+          });
+
+          const nextTables = dataTables.map(t => {
+            if (t.id === tableId) {
+              return { ...t, columns: newColumns, rows: replaceColumns ? newRows : [...t.rows, ...newRows] };
+            }
+            return t;
+          });
+
+          setDataTables(nextTables);
+          const updatedTable = nextTables.find(t => t.id === tableId);
+          if (updatedTable) {
+            setEditingDataTable(updatedTable);
+            syncToFirestore('dataTables', tableId, updatedTable);
+            recordHistory(`Imported CSV into table ${updatedTable.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
           }
-          return t;
-        });
-
-        setDataTables(nextTables);
-        setEditingDataTable(nextTables.find(t => t.id === tableId)!);
-        localStorage.setItem('userDataTables', JSON.stringify(nextTables));
-        const updatedTable = nextTables.find(t => t.id === tableId);
-        if (updatedTable) syncToFirestore('dataTables', tableId, updatedTable);
-        recordHistory(`Imported CSV into table ${nextTables.find(t => t.id === tableId)?.name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
-        alert("CSV imported successfully!");
-
-      } catch (err) {
-        alert("Error parsing CSV file.");
-      }
-    };
-    reader.readAsText(file);
-    event.target.value = "";
+          localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+          alert("CSV imported successfully!");
+          event.target.value = '';
+        } catch (err) {
+          console.error("CSV Import Error:", err);
+          alert("Error parsing CSV file.");
+        }
+      },
+      error: (error) => {
+        console.error("PapaParse Error:", error);
+        alert("Error reading CSV file.");
+      },
+      skipEmptyLines: 'greedy'
+    });
   };
 
   const openQtyPanel = (itemId: string) => {
@@ -5034,20 +5018,60 @@ function EstimatorAppContent() {
                   }
                 });
 
-                // Check for "Best Match" (normalized name match)
+                // Check for "Best Match" (normalized name match + Levenshtein)
                 const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
                 const vNorm = normalize(v);
+                const vLower = v.toLowerCase();
                 
-                const findBest = (list: string[]) => list.find(k => normalize(k) === vNorm);
-                const bestMatch = findBest(relevantVars) || findBest(otherVars);
+                const allVars = Object.entries(variableRegistry);
+                const exactMatches = allVars.filter(([regKey]) => regKey.toLowerCase() === vLower);
+                const normMatches = allVars.filter(([regKey]) => normalize(regKey) === vNorm);
+                
+                const isRelevant = (info: any) => {
+                  if (!item) return info.scope === 'global';
+                  if (info.scope === 'global') return true;
+                  if (!info.col) return false;
+                  const c = info.col;
+                  if (c.scope === 'category' && c.category === item.category) return true;
+                  if (c.scope === 'subcategory' && c.category === item.category && c.subCategory === item.sub_category) return true;
+                  if (c.scope === 'itemgroup' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '')) return true;
+                  if (c.scope === 'material' && c.category === item.category && c.subCategory === item.sub_category && c.itemGroup === (item.sub_item_1 || '') && c.materialName === item.item_name) return true;
+                  return false;
+                };
+
+                const bestExactRelevant = exactMatches.find(([_, info]) => isRelevant(info));
+                const bestExactGlobal = exactMatches.find(([_, info]) => info.scope === 'global');
+                const bestNormRelevant = normMatches.find(([_, info]) => isRelevant(info));
+                const bestNormGlobal = normMatches.find(([_, info]) => info.scope === 'global');
+
+                let bestMatch = bestExactRelevant?.[0] || bestExactGlobal?.[0] || bestNormRelevant?.[0] || bestNormGlobal?.[0] || exactMatches[0]?.[0] || normMatches[0]?.[0];
+                let isHighConfidence = !!bestMatch;
+                
+                // If no exact/norm match, try Levenshtein
+                if (!bestMatch) {
+                  const closeMatches = allVars
+                    .map(([regKey, info]) => ({ regKey, info, dist: levenshtein(vNorm, normalize(regKey)) }))
+                    .filter(m => m.dist > 0 && m.dist <= 2)
+                    .sort((a, b) => a.dist - b.dist);
+                  
+                  const bestCloseRelevant = closeMatches.find(m => isRelevant(m.info));
+                  const bestCloseGlobal = closeMatches.find(m => m.info.scope === 'global');
+                  bestMatch = bestCloseRelevant?.regKey || bestCloseGlobal?.regKey || closeMatches[0]?.regKey;
+                  isHighConfidence = !!bestMatch;
+                }
+
+                const isAutoMapped = isMapped && variableMappings[v] === `[${bestMatch}]`;
 
                 return (
-                  <div key={v} className={`p-3 rounded border transition ${isMapped ? 'border-slate-200 bg-white' : 'border-amber-300 bg-amber-50'}`}>
+                  <div key={v} className={`p-3 rounded border transition ${isMapped ? 'border-slate-200 bg-white' : (bestMatch ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50')}`}>
                     <div className="flex justify-between items-center mb-1">
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                         Template Variable: <span className="text-indigo-600">[{v}]</span>
                       </label>
-                      {!isMapped && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">Required</span>}
+                      <div className="flex gap-1">
+                        {!isMapped && <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">Required</span>}
+                        {isAutoMapped && <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">High Confidence Match</span>}
+                      </div>
                     </div>
                     
                     {bestMatch && !isMapped && (
@@ -6901,77 +6925,73 @@ function EstimatorAppContent() {
                       <input type="file" className="hidden" accept=".csv" onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = (event) => {
-                          const text = event.target?.result as string;
-                          const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
-                          if (lines.length < 1) return;
-                          
-                          const parseCSVLine = (line: string) => {
-                            const result = [];
-                            let current = '';
-                            let inQuotes = false;
-                            for (let i = 0; i < line.length; i++) {
-                              const char = line[i];
-                              if (char === '"') {
-                                if (inQuotes && line[i+1] === '"') { current += '"'; i++; } else { inQuotes = !inQuotes; }
-                              } else if (char === ',' && !inQuotes) {
-                                result.push(current);
-                                current = '';
-                              } else {
-                                current += char;
-                              }
+                        
+                        Papa.parse(file, {
+                          complete: (results) => {
+                            try {
+                              const data = results.data as string[][];
+                              if (data.length < 1) return;
+                              
+                              const headers = data[0];
+                              const rows = data.slice(1).filter(row => row.length > 0 && row.some(cell => cell.trim() !== ''));
+                              const tableName = file.name.replace(/\.[^/.]+$/, "").replace(/_/g, " ");
+                              
+                              const newColumns = headers.map((h, idx) => {
+                                const name = h.trim() || `Column ${idx + 1}`;
+                                const key = name.replace(/\s+/g, '_').toLowerCase();
+                                let type: 'string' | 'number' = 'string';
+                                
+                                for (let i = 0; i < Math.min(rows.length, 5); i++) {
+                                  const val = rows[i][idx];
+                                  if (val && val.trim() !== '') {
+                                    const num = Number(val.trim());
+                                    if (!isNaN(num)) {
+                                      type = 'number';
+                                      break;
+                                    }
+                                  }
+                                }
+                                return { name, key, type };
+                              });
+
+                              const newRows = rows.map(vals => {
+                                const rowObj: Record<string, any> = {};
+                                newColumns.forEach((col, idx) => {
+                                  if (idx < vals.length) {
+                                    const val = vals[idx].trim();
+                                    rowObj[col.key] = col.type === 'number' ? (parseFloat(val) || 0) : val;
+                                  } else {
+                                    rowObj[col.key] = col.type === 'number' ? 0 : '';
+                                  }
+                                });
+                                return rowObj;
+                              });
+
+                              const newTable: DataTable = {
+                                id: "DT-" + Date.now(),
+                                name: tableName,
+                                columns: newColumns,
+                                rows: newRows
+                              };
+
+                              const nextTables = [...dataTables, newTable];
+                              setDataTables(nextTables);
+                              setEditingDataTable(newTable);
+                              localStorage.setItem('userDataTables', JSON.stringify(nextTables));
+                              syncToFirestore('dataTables', newTable.id, newTable);
+                              recordHistory(`Imported new table ${tableName} from CSV`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
+                              alert(`Successfully imported table "${tableName}" with ${newRows.length} rows.`);
+                            } catch (err) {
+                              console.error("New Table CSV Import Error:", err);
+                              alert("Error parsing CSV file.");
                             }
-                            result.push(current);
-                            return result;
-                          };
-
-                          const headers = parseCSVLine(lines[0]);
-                          const tableName = file.name.replace(/\.[^/.]+$/, "").replace(/_/g, " ");
-                          
-                          const newColumns = headers.map(h => {
-                            const name = h.trim() || "Column";
-                            const key = name.replace(/\s+/g, '_').toLowerCase();
-                            let type: 'string' | 'number' = 'string';
-                            if (lines.length > 1) {
-                              const firstRowVals = parseCSVLine(lines[1]);
-                              const valIndex = headers.indexOf(h);
-                              if (valIndex !== -1 && firstRowVals[valIndex]) {
-                                const num = Number(firstRowVals[valIndex]);
-                                if (!isNaN(num)) type = 'number';
-                              }
-                            }
-                            return { name, key, type };
-                          });
-
-                          const newRows = lines.slice(1).map(line => {
-                            const vals = parseCSVLine(line);
-                            const rowObj: Record<string, any> = {};
-                            newColumns.forEach((col, idx) => {
-                              if (idx < vals.length) {
-                                rowObj[col.key] = col.type === 'number' ? (parseFloat(vals[idx]) || 0) : vals[idx];
-                              } else {
-                                rowObj[col.key] = col.type === 'number' ? 0 : '';
-                              }
-                            });
-                            return rowObj;
-                          });
-
-                          const newTable: DataTable = {
-                            id: "DT-" + Date.now(),
-                            name: tableName,
-                            columns: newColumns,
-                            rows: newRows
-                          };
-
-                          const nextTables = [...dataTables, newTable];
-                          setDataTables(nextTables);
-                          setEditingDataTable(newTable);
-                          localStorage.setItem('userDataTables', JSON.stringify(nextTables));
-                          syncToFirestore('dataTables', newTable.id, newTable);
-                          recordHistory(`Imported new table ${tableName} from CSV`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, formulaTemplates, nextTables);
-                        };
-                        reader.readAsText(file);
+                          },
+                          error: (error) => {
+                            console.error("PapaParse Error:", error);
+                            alert("Error reading CSV file.");
+                          },
+                          skipEmptyLines: 'greedy'
+                        });
                         e.target.value = '';
                       }} />
                     </label>
