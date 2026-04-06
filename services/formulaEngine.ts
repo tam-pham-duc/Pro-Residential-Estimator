@@ -43,13 +43,15 @@ export function buildContext(
   // Add custom variables
   customVariables.forEach(v => {
     const key = normalizeKey(v.name);
-    context[key] = parseFloat(v.value) || 0;
+    const numVal = parseFloat(v.value);
+    context[key] = !isNaN(numVal) && isFinite(numVal) ? numVal : v.value;
   });
 
   // Add dynamic scope variables
   Object.entries(dynamicScope).forEach(([k, v]) => {
     const key = normalizeKey(k);
-    context[key] = parseFloat(v) || 0;
+    const numVal = parseFloat(v);
+    context[key] = !isNaN(numVal) && isFinite(numVal) ? numVal : v;
   });
 
   // Add math functions

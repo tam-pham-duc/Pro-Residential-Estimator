@@ -7,7 +7,7 @@ import { normalizeKey } from '@/services/formulaEngine';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable, ConditionalFormatRule, FullBackup } from '@/lib/types';
 import { 
   Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings, Variable, FileUp,
-  ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X,
+  ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X, Info,
   Undo2, Redo2, Copy, Users, Folder, BookOpen, Palette, LogIn, LogOut, User as UserIcon,
   Key, Check, AlertCircle, Edit, RefreshCw, Database, Shield, FileOutput, FileInput
 } from 'lucide-react';
@@ -216,6 +216,34 @@ const FORMULA_FUNCTIONS = [
   { name: 'LOOKUP', description: 'Lookup value in a data table', insert: 'LOOKUP("TableName", "SearchCol", SearchVal, "ResultCol")', example: 'LOOKUP("LaborRates", "Trade", "Carpenter", "Rate")' },
 ];
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
 function DebouncedInput({ 
   value: initialValue, 
   onChange, 
@@ -251,7 +279,83 @@ function DebouncedInput({
   );
 }
 
-export default function EstimatorApp() {
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: any }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let errorMessage = "Something went wrong.";
+      try {
+        const parsed = JSON.parse(this.state.error.message);
+        if (parsed.error.includes('insufficient permissions')) {
+          errorMessage = "You don't have permission to perform this action. Please check your account settings.";
+        }
+      } catch (e) {
+        // Not a JSON error
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+          <div className="bg-white p-8 rounded-xl shadow-xl max-w-md w-full text-center">
+            <div className="bg-red-100 text-red-600 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+              <AlertCircle size={32} />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 mb-2">Application Error</h1>
+            <p className="text-slate-600 mb-6">{errorMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+const FormulaToolbar = ({ onInsert }: { onInsert: (text: string) => void }) => {
+  const functions = [
+    { label: 'IF', text: 'IF(condition, true_val, false_val)' },
+    { label: 'ROUNDUP', text: 'ROUNDUP(value)' },
+    { label: 'ROUNDDOWN', text: 'ROUNDDOWN(value)' },
+    { label: 'MAX', text: 'MAX(a, b)' },
+    { label: 'MIN', text: 'MIN(a, b)' },
+    { label: 'LOOKUP', text: 'LOOKUP(value, table_name, col_index)' },
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-1 p-1 bg-slate-100 border-b border-slate-200 text-xs">
+      {functions.map(fn => (
+        <button
+          key={fn.label}
+          type="button"
+          onClick={(e) => { e.preventDefault(); onInsert(fn.text); }}
+          className="px-2 py-1 bg-white border border-slate-300 rounded hover:bg-slate-50 text-slate-700 font-mono transition-colors"
+          title={`Insert ${fn.label} function`}
+        >
+          {fn.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+function EstimatorAppContent() {
   const [isMounted, setIsMounted] = useState(false);
   const [catalog, setCatalog] = useState<Item[]>(defaultCatalog);
   const [takeoffData, setTakeoffData] = useState<Record<string, TakeoffItem>>({});
@@ -298,6 +402,11 @@ export default function EstimatorApp() {
   const [formulaTemplateModalOpen, setFormulaTemplateModalOpen] = useState(false);
   const [editingFormulaTemplate, setEditingFormulaTemplate] = useState<FormulaTemplate | null>(null);
   const [ftFormula, setFtFormula] = useState("");
+  const [ftScope, setFtScope] = useState<'category' | 'subcategory' | 'itemgroup' | 'material' | 'global'>('global');
+  const [ftCategory, setFtCategory] = useState("");
+  const [ftSubCategory, setFtSubCategory] = useState("");
+  const [ftItemGroup, setFtItemGroup] = useState("");
+  const [ftMaterialName, setFtMaterialName] = useState("");
   const [lastBackupTime, setLastBackupTime] = useState<string>("");
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -315,14 +424,24 @@ export default function EstimatorApp() {
   const [newDisplayName, setNewDisplayName] = useState("");
   const [profileUpdateStatus, setProfileUpdateStatus] = useState<{type: 'success' | 'error', message: string} | null>(null);
 
-  // Initialize display name when modal opens
+  // Sync formula template form when editing
   useEffect(() => {
-    if (showAccountModal && user) {
-      setNewDisplayName(user.displayName || "");
-      setProfileUpdateStatus(null);
-      setIsEditingProfile(false);
+    if (editingFormulaTemplate) {
+      setFtFormula(editingFormulaTemplate.formula || "");
+      setFtScope(editingFormulaTemplate.scope || 'global');
+      setFtCategory(editingFormulaTemplate.category || "");
+      setFtSubCategory(editingFormulaTemplate.subCategory || "");
+      setFtItemGroup(editingFormulaTemplate.itemGroup || "");
+      setFtMaterialName(editingFormulaTemplate.materialName || "");
+    } else {
+      setFtFormula("");
+      setFtScope('global');
+      setFtCategory("");
+      setFtSubCategory("");
+      setFtItemGroup("");
+      setFtMaterialName("");
     }
-  }, [showAccountModal, user]);
+  }, [editingFormulaTemplate]);
 
   const handleUpdateProfile = async () => {
     if (!user) return;
@@ -409,6 +528,16 @@ export default function EstimatorApp() {
     setIsMounted(true);
     
     // Load local data
+    const safeParse = (data: string | null, fallback: any = null) => {
+      if (!data) return fallback;
+      try {
+        return JSON.parse(data);
+      } catch (e) {
+        console.error("Failed to parse JSON:", e);
+        return fallback;
+      }
+    };
+
     const catalogData = localStorage.getItem('userItemCatalog');
     const clientsData = localStorage.getItem('userClients');
     const formulaTemplatesData = localStorage.getItem('formulaTemplates');
@@ -419,13 +548,27 @@ export default function EstimatorApp() {
     const defaultOverage = localStorage.getItem('defaultOveragePct');
     const showPricing = localStorage.getItem('showPricingColumns');
 
-    if (catalogData) setCatalog(JSON.parse(catalogData));
-    if (clientsData) setClients(JSON.parse(clientsData));
-    if (formulaTemplatesData) setFormulaTemplates(JSON.parse(formulaTemplatesData));
-    if (dataTablesData) setDataTables(JSON.parse(dataTablesData));
-    if (dynamicColumnsData) setDynamicColumns(JSON.parse(dynamicColumnsData));
-    if (projectTemplatesData) setTemplates(JSON.parse(projectTemplatesData));
-    if (savedJobsData) setSavedJobs(JSON.parse(savedJobsData));
+    const parsedCatalog = safeParse(catalogData);
+    if (parsedCatalog) setCatalog(parsedCatalog);
+    
+    const parsedClients = safeParse(clientsData);
+    if (parsedClients) setClients(parsedClients);
+    
+    const parsedFormulaTemplates = safeParse(formulaTemplatesData);
+    if (parsedFormulaTemplates) setFormulaTemplates(parsedFormulaTemplates);
+    
+    const parsedDataTables = safeParse(dataTablesData);
+    if (parsedDataTables) setDataTables(parsedDataTables);
+    
+    const parsedDynamicColumns = safeParse(dynamicColumnsData);
+    if (parsedDynamicColumns) setDynamicColumns(parsedDynamicColumns);
+    
+    const parsedProjectTemplates = safeParse(projectTemplatesData);
+    if (parsedProjectTemplates) setTemplates(parsedProjectTemplates);
+    
+    const parsedSavedJobs = safeParse(savedJobsData);
+    if (parsedSavedJobs) setSavedJobs(parsedSavedJobs);
+
     if (defaultOverage) setDefaultOveragePct(defaultOverage);
     if (showPricing) setShowPricingColumns(showPricing === 'true');
 
@@ -700,8 +843,8 @@ export default function EstimatorApp() {
     }
   };
 
-  const handleFirestoreError = (error: any, operation: string, path: string | null) => {
-    const errInfo = {
+  const handleFirestoreError = (error: any, operation: OperationType, path: string | null) => {
+    const errInfo: FirestoreErrorInfo = {
       error: error instanceof Error ? error.message : String(error),
       authInfo: {
         userId: auth.currentUser?.uid,
@@ -720,7 +863,9 @@ export default function EstimatorApp() {
       path
     };
     console.error('Firestore Error: ', JSON.stringify(errInfo));
-    // throw new Error(JSON.stringify(errInfo)); // Don't throw to avoid crashing the app, just log and maybe show a toast
+    if (errInfo.error.includes('insufficient permissions')) {
+      throw new Error(JSON.stringify(errInfo));
+    }
   };
 
   // Sync to Firestore
@@ -776,7 +921,7 @@ export default function EstimatorApp() {
           setClientAddress(data.clientAddress || "");
         }
       } catch (error) {
-        handleFirestoreError(error, 'GET/SET', `users/${user.uid}`);
+        handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
       }
     };
 
@@ -786,7 +931,7 @@ export default function EstimatorApp() {
     const unsubCatalog = onSnapshot(collection(db, 'users', user.uid, 'catalog'), (snap) => {
       const newCatalog = snap.docs.map(d => d.data() as Item);
       if (newCatalog.length > 0) setCatalog(newCatalog);
-    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/catalog`));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/catalog`));
 
     const unsubTakeoff = onSnapshot(collection(db, 'users', user.uid, 'takeoff'), (snap) => {
       const newData: Record<string, TakeoffItem> = {};
@@ -795,27 +940,50 @@ export default function EstimatorApp() {
         newData[data.itemId] = data as TakeoffItem;
       });
       if (Object.keys(newData).length > 0) setTakeoffData(newData);
-    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/takeoff`));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/takeoff`));
 
     const unsubVariables = onSnapshot(collection(db, 'users', user.uid, 'variables'), (snap) => {
       const newVars = snap.docs.map(d => d.data() as CustomVariable);
       if (newVars.length > 0) setCustomVariables(newVars);
-    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/variables`));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/variables`));
 
     const unsubClients = onSnapshot(collection(db, 'users', user.uid, 'clients'), (snap) => {
       const newClients = snap.docs.map(d => d.data() as Client);
       if (newClients.length > 0) setClients(newClients);
-    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/clients`));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/clients`));
 
     const unsubTemplates = onSnapshot(collection(db, 'users', user.uid, 'templates'), (snap) => {
       const newTemplates = snap.docs.map(d => d.data() as ProjectTemplate);
       if (newTemplates.length > 0) setTemplates(newTemplates);
-    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/templates`));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/templates`));
 
     const unsubDataTables = onSnapshot(collection(db, 'users', user.uid, 'dataTables'), (snap) => {
       const newDataTables = snap.docs.map(d => d.data() as DataTable);
       if (newDataTables.length > 0) setDataTables(newDataTables);
-    }, (err) => handleFirestoreError(err, 'LIST', `users/${user.uid}/dataTables`));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/dataTables`));
+
+    const unsubDynamicColumns = onSnapshot(collection(db, 'users', user.uid, 'dynamicColumns'), (snap) => {
+      const newCols = snap.docs.map(d => d.data() as DynamicColumn);
+      if (newCols.length > 0) setDynamicColumns(newCols);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/dynamicColumns`));
+
+    const unsubEntityData = onSnapshot(collection(db, 'users', user.uid, 'entityData'), (snap) => {
+      const newEntityData: Record<string, Record<string, any>> = {};
+      snap.docs.forEach(d => {
+        const data = d.data();
+        newEntityData[data.id] = data.values;
+      });
+      if (Object.keys(newEntityData).length > 0) setEntityData(newEntityData);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/entityData`));
+
+    const unsubSavedJobs = onSnapshot(collection(db, 'users', user.uid, 'savedJobs'), (snap) => {
+      const newJobs: Record<string, Job> = {};
+      snap.docs.forEach(d => {
+        const data = d.data();
+        newJobs[data.id] = data as Job;
+      });
+      if (Object.keys(newJobs).length > 0) setSavedJobs(newJobs);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.uid}/savedJobs`));
 
     return () => {
       unsubCatalog();
@@ -824,6 +992,9 @@ export default function EstimatorApp() {
       unsubClients();
       unsubTemplates();
       unsubDataTables();
+      unsubDynamicColumns();
+      unsubEntityData();
+      unsubSavedJobs();
     };
   }, [user, isAuthReady]);
 
@@ -842,12 +1013,33 @@ export default function EstimatorApp() {
           lastUpdated: new Date().toISOString()
         }, { merge: true });
       } catch (error) {
-        handleFirestoreError(error, 'UPDATE', `users/${user.uid}`);
+        handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
       }
     }, 2000);
 
     return () => clearTimeout(timer);
   }, [user, projectName, clientName, clientEmail, clientPhone, clientAddress, isMounted]);
+
+  const prevEntityDataRef = useRef(entityData);
+  useEffect(() => {
+    if (!user) return;
+    const current = entityData;
+    const previous = prevEntityDataRef.current;
+    
+    Object.keys(current).forEach(key => {
+      if (current[key] !== previous[key]) {
+        syncToFirestore('entityData', key, { id: key, values: current[key] });
+      }
+    });
+    
+    Object.keys(previous).forEach(key => {
+      if (!(key in current)) {
+        removeFromFirestore('entityData', key);
+      }
+    });
+    
+    prevEntityDataRef.current = current;
+  }, [entityData, user]);
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' | null }>({ key: '', direction: null });
 
   const handleSort = (key: string) => {
@@ -870,6 +1062,22 @@ export default function EstimatorApp() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formulaInputRef = useRef<ReactCodeMirrorRef>(null);
+  const ftFormulaRef = useRef<ReactCodeMirrorRef>(null);
+  const cvFormulaRef = useRef<ReactCodeMirrorRef>(null);
+  
+  const insertIntoEditor = useCallback((ref: React.RefObject<ReactCodeMirrorRef | null>, text: string, setter: (val: string) => void, currentVal: string) => {
+    if (ref.current?.view) {
+      const view = ref.current.view;
+      const selection = view.state.selection.main;
+      view.dispatch({
+        changes: { from: selection.from, to: selection.to, insert: text },
+        selection: { anchor: selection.from + text.length }
+      });
+      view.focus();
+    } else {
+      setter(currentVal + text);
+    }
+  }, []);
   
   const actionHistoryRef = useRef<HistoryRecord[]>([]);
   const historyIndexRef = useRef<number>(0);
@@ -1735,7 +1943,7 @@ export default function EstimatorApp() {
       setTakeoffData(newData);
     }
     return { newData, hasChanges };
-  }, [takeoffData, catalog, defaultOveragePct, collapsedState, dynamicColumns]);
+  }, [takeoffData, catalog, defaultOveragePct, collapsedState, dynamicColumns, dataTables]);
 
   const handleEntityDataBlur = (actionName: string, changedFields: string[] = []) => {
     if (changedFields.length > 0) {
@@ -1753,7 +1961,7 @@ export default function EstimatorApp() {
     try {
       await setDoc(doc(db, 'users', user.uid, collectionName, id), { ...data, itemId: id, id: id });
     } catch (error) {
-      handleFirestoreError(error, 'WRITE', `users/${user.uid}/${collectionName}/${id}`);
+      handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}/${collectionName}/${id}`);
     }
   };
 
@@ -1762,7 +1970,7 @@ export default function EstimatorApp() {
     try {
       await deleteDoc(doc(db, 'users', user.uid, collectionName, id));
     } catch (error) {
-      handleFirestoreError(error, 'DELETE', `users/${user.uid}/${collectionName}/${id}`);
+      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/${collectionName}/${id}`);
     }
   };
 
@@ -1840,15 +2048,48 @@ export default function EstimatorApp() {
       setCatalog(newCatalog);
       localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
       
+      const newEntityData = { ...entityData };
+      
+      // Update category entity data
+      if (newEntityData[`CAT:${oldCat}`]) {
+        newEntityData[`CAT:${upperNew}`] = newEntityData[`CAT:${oldCat}`];
+        delete newEntityData[`CAT:${oldCat}`];
+      }
+      
+      // Update all subcategories and item groups entity data under this category
+      Object.keys(newEntityData).forEach(key => {
+        if (key.startsWith(`SUBCAT:${oldCat}|`)) {
+          const subCat = key.split('|')[1];
+          newEntityData[`SUBCAT:${upperNew}|${subCat}`] = newEntityData[key];
+          delete newEntityData[key];
+        } else if (key.startsWith(`ITEMGROUP:${oldCat}|`)) {
+          const parts = key.split('|');
+          const subCat = parts[1];
+          const itemGroup = parts[2];
+          newEntityData[`ITEMGROUP:${upperNew}|${subCat}|${itemGroup}`] = newEntityData[key];
+          delete newEntityData[key];
+        }
+      });
+      
+      setEntityData(newEntityData);
+
       setCollapsedState(prev => {
         const next = { ...prev };
         if (next[oldCat] !== undefined) {
           next[upperNew] = next[oldCat];
           delete next[oldCat];
         }
+        // Also update subcategory and itemgroup collapsed states
+        Object.keys(next).forEach(key => {
+          if (key.startsWith(oldCat + '||')) {
+            const suffix = key.substring(oldCat.length);
+            next[upperNew + suffix] = next[key];
+            delete next[key];
+          }
+        });
         return next;
       });
-      recordHistory(`Renamed Category '${oldCat}' to '${upperNew}'`, takeoffData, newCatalog, projectName, clientName);
+      recordHistory(`Renamed Category '${oldCat}' to '${upperNew}'`, takeoffData, newCatalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, newEntityData);
     }
   };
 
@@ -1912,6 +2153,26 @@ export default function EstimatorApp() {
       setCatalog(newCatalog);
       localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
       
+      const newEntityData = { ...entityData };
+      const oldSubCatKey = `SUBCAT:${cat}|${oldSub}`;
+      const newSubCatKey = `SUBCAT:${cat}|${newSub}`;
+      
+      if (newEntityData[oldSubCatKey]) {
+        newEntityData[newSubCatKey] = newEntityData[oldSubCatKey];
+        delete newEntityData[oldSubCatKey];
+      }
+      
+      // Update item groups under this subcategory
+      Object.keys(newEntityData).forEach(key => {
+        if (key.startsWith(`ITEMGROUP:${cat}|${oldSub}|`)) {
+          const itemGroup = key.split('|')[2];
+          newEntityData[`ITEMGROUP:${cat}|${newSub}|${itemGroup}`] = newEntityData[key];
+          delete newEntityData[key];
+        }
+      });
+      
+      setEntityData(newEntityData);
+
       const oldKey = cat + '||' + oldSub;
       const newKey = cat + '||' + newSub;
       setCollapsedState(prev => {
@@ -1920,9 +2181,17 @@ export default function EstimatorApp() {
           next[newKey] = next[oldKey];
           delete next[oldKey];
         }
+        // Update itemgroup collapsed states
+        Object.keys(next).forEach(k => {
+          if (k.startsWith(oldKey + '||')) {
+            const suffix = k.substring(oldKey.length);
+            next[newKey + suffix] = next[k];
+            delete next[k];
+          }
+        });
         return next;
       });
-      recordHistory(`Renamed Sub-Category '${oldSub}' to '${newSub}'`, takeoffData, newCatalog, projectName, clientName);
+      recordHistory(`Renamed Sub-Category '${oldSub}' to '${newSub}'`, takeoffData, newCatalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, newEntityData);
     }
   };
 
@@ -1980,17 +2249,28 @@ export default function EstimatorApp() {
       setCatalog(newCatalog);
       localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
       
-      const oldKey = cat + '||' + subCat + '||' + oldSubItem;
-      const newKey = cat + '||' + subCat + '||' + newSubItem;
+      const newEntityData = { ...entityData };
+      const oldKey = `ITEMGROUP:${cat}|${subCat}|${oldSubItem}`;
+      const newKey = `ITEMGROUP:${cat}|${subCat}|${newSubItem}`;
+      
+      if (newEntityData[oldKey]) {
+        newEntityData[newKey] = newEntityData[oldKey];
+        delete newEntityData[oldKey];
+      }
+      
+      setEntityData(newEntityData);
+
+      const oldCollapsedKey = cat + '||' + subCat + '||' + oldSubItem;
+      const newCollapsedKey = cat + '||' + subCat + '||' + newSubItem;
       setCollapsedState(prev => {
         const next = { ...prev };
-        if (next[oldKey] !== undefined) {
-          next[newKey] = next[oldKey];
-          delete next[oldKey];
+        if (next[oldCollapsedKey] !== undefined) {
+          next[newCollapsedKey] = next[oldCollapsedKey];
+          delete next[oldCollapsedKey];
         }
         return next;
       });
-      recordHistory(`Renamed L3 Group '${oldSubItem}' to '${newSubItem}'`, takeoffData, newCatalog, projectName, clientName);
+      recordHistory(`Renamed L3 Group '${oldSubItem}' to '${newSubItem}'`, takeoffData, newCatalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, newEntityData);
     }
   };
 
@@ -2131,7 +2411,8 @@ export default function EstimatorApp() {
     const newSavedJobs = { ...savedJobs, [newJob.id]: newJob };
     setSavedJobs(newSavedJobs);
     localStorage.setItem('savedEstimatingJobs', JSON.stringify(newSavedJobs));
-    alert("Job saved locally!");
+    syncToFirestore('savedJobs', newJob.id, newJob);
+    alert("Job saved to cloud!");
     setLastAutoSaveTime(new Date().toLocaleString());
     setShowSaveConfirmModal(false);
   };
@@ -2864,6 +3145,13 @@ export default function EstimatorApp() {
       // Sync to Firestore
       removeFromFirestore('catalog', editingItemId);
       removeFromFirestore('takeoff', editingItemId);
+      removeFromFirestore('entityData', `MATERIAL:${editingItemId}`);
+
+      setEntityData(prev => {
+        const newData = { ...prev };
+        delete newData[`MATERIAL:${editingItemId}`];
+        return newData;
+      });
 
       setTakeoffData(prev => {
         const newData = { ...prev };
@@ -4446,6 +4734,15 @@ export default function EstimatorApp() {
                   }
                   
                   setDynamicColumns(newCols);
+                  
+                  // Sync to Firestore
+                  if (editingColumn) {
+                    syncToFirestore('dynamicColumns', editingColumn.id, { ...editingColumn, name, key, dataType, scope, unit, defaultValue, category, subCategory, itemGroup, materialName });
+                  } else {
+                    const newCol = newCols[newCols.length - 1];
+                    syncToFirestore('dynamicColumns', newCol.id, newCol);
+                  }
+
                   const { newData, hasChanges } = recalculateAllFormulas(customVariables, entityData, true, collapsedState, newCols);
                   recordHistory(editingColumn ? `Updated column ${name}` : `Added column ${name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, customVariables, jobNotes, newCols, entityData);
                   
@@ -4640,6 +4937,7 @@ export default function EstimatorApp() {
                                 }
                                 const newCols = dynamicColumns.filter(col => col.id !== c.id);
                                 setDynamicColumns(newCols);
+                                removeFromFirestore('dynamicColumns', c.id);
                                 const { newData, hasChanges } = recalculateAllFormulas(customVariables, entityData, true, collapsedState, newCols);
                                 recordHistory(`Deleted column ${c.name}`, hasChanges ? newData : takeoffData, catalog, projectName, clientName, customVariables, jobNotes, newCols, entityData);
                                 if (editingColumn?.id === c.id) setEditingColumn(null);
@@ -4870,7 +5168,8 @@ export default function EstimatorApp() {
                     <label className="block text-xs font-bold text-slate-600 mb-1">Scope</label>
                     <select 
                       id="ft-scope"
-                      defaultValue={editingFormulaTemplate?.scope || 'global'}
+                      value={ftScope}
+                      onChange={(e) => setFtScope(e.target.value as any)}
                       className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
                     >
                       <option value="global">Global (All Items)</option>
@@ -4881,10 +5180,43 @@ export default function EstimatorApp() {
                     </select>
                   </div>
                 </div>
+
+                {ftScope !== 'global' && (
+                  <div className="pt-2 border-t border-indigo-100">
+                    <label className="block text-xs font-bold text-indigo-600 mb-1">
+                      {ftScope === 'category' ? 'Select Category' : 
+                       ftScope === 'subcategory' ? 'Select Sub-Category' : 
+                       ftScope === 'itemgroup' ? 'Select Item Group' : 'Select Material'}
+                    </label>
+                    <select
+                      value={
+                        ftScope === 'category' ? ftCategory : 
+                        ftScope === 'subcategory' ? ftSubCategory : 
+                        ftScope === 'itemgroup' ? ftItemGroup : ftMaterialName
+                      }
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (ftScope === 'category') setFtCategory(val);
+                        else if (ftScope === 'subcategory') setFtSubCategory(val);
+                        else if (ftScope === 'itemgroup') setFtItemGroup(val);
+                        else setFtMaterialName(val);
+                      }}
+                      className="w-full border p-2 rounded text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
+                    >
+                      <option value="">-- Select {ftScope.charAt(0).toUpperCase() + ftScope.slice(1)} --</option>
+                      {ftScope === 'category' && Array.from(new Set(catalog.map(i => i.category))).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                      {ftScope === 'subcategory' && Array.from(new Set(catalog.map(i => i.sub_category))).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                      {ftScope === 'itemgroup' && Array.from(new Set(catalog.map(i => i.sub_item_1))).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                      {ftScope === 'material' && Array.from(new Set(catalog.map(i => i.item_name))).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Formula</label>
+                  <FormulaToolbar onInsert={(text) => insertIntoEditor(ftFormulaRef, text, setFtFormula, ftFormula)} />
                   <div className="border border-indigo-200 rounded overflow-hidden focus-within:ring-2 focus-within:ring-indigo-200">
                     <CodeMirror
+                      ref={ftFormulaRef}
                       value={ftFormula}
                       onChange={(val) => setFtFormula(val)}
                       extensions={[
@@ -4925,56 +5257,63 @@ export default function EstimatorApp() {
                       Cancel Edit
                     </button>
                   )}
-                  <button 
-                    onClick={() => {
-                      const nameInput = document.getElementById('ft-name') as HTMLInputElement;
-                      const descInput = document.getElementById('ft-desc') as HTMLInputElement;
-                      const scopeInput = document.getElementById('ft-scope') as HTMLSelectElement;
-                      
-                      const name = nameInput.value.trim();
-                      const formula = ftFormula.trim();
-                      const desc = descInput.value.trim();
-                      const scope = scopeInput.value as any;
-                      
-                      if (!name) {
-                        alert("Please enter a template name.");
-                        return;
-                      }
-                      if (!formula) {
-                        alert("Please enter a formula.");
-                        return;
-                      }
-                      
-                      const variables = extractVariablesFromFormula(formula);
-                      
-                      let newTemplates = [...formulaTemplates];
-                      if (editingFormulaTemplate) {
-                        newTemplates = newTemplates.map(t => t.id === editingFormulaTemplate.id ? { ...t, name, formula, description: desc, scope, variables } : t);
-                      } else {
-                        newTemplates.push({
-                          id: "FT-" + Date.now(),
+                    <button 
+                      onClick={() => {
+                        const nameInput = document.getElementById('ft-name') as HTMLInputElement;
+                        const descInput = document.getElementById('ft-desc') as HTMLInputElement;
+                        
+                        const name = nameInput.value.trim();
+                        const formula = ftFormula.trim();
+                        const desc = descInput.value.trim();
+                        const scope = ftScope;
+                        
+                        if (!name) {
+                          alert("Please enter a template name.");
+                          return;
+                        }
+                        if (!formula) {
+                          alert("Please enter a formula.");
+                          return;
+                        }
+                        
+                        const variables = extractVariablesFromFormula(formula);
+                        
+                        let newTemplates = [...formulaTemplates];
+                        const templateData: Partial<FormulaTemplate> = {
                           name,
                           formula,
                           description: desc,
                           scope,
                           variables,
-                          createdAt: new Date().toISOString()
-                        });
-                      }
-                      
-                      setFormulaTemplates(newTemplates);
-                      localStorage.setItem('formulaTemplates', JSON.stringify(newTemplates));
-                      recordHistory(editingFormulaTemplate ? `Updated formula template ${name}` : `Added formula template ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, newTemplates);
-                      
-                      // Reset form
-                      nameInput.value = '';
-                      setFtFormula('');
-                      descInput.value = '';
-                      scopeInput.value = 'global';
-                      setEditingFormulaTemplate(null);
-                    }}
-                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded transition"
-                  >
+                          category: scope === 'category' ? ftCategory : undefined,
+                          subCategory: scope === 'subcategory' ? ftSubCategory : undefined,
+                          itemGroup: scope === 'itemgroup' ? ftItemGroup : undefined,
+                          materialName: scope === 'material' ? ftMaterialName : undefined,
+                        };
+
+                        if (editingFormulaTemplate) {
+                          newTemplates = newTemplates.map(t => t.id === editingFormulaTemplate.id ? { ...t, ...templateData } : t);
+                        } else {
+                          newTemplates.push({
+                            id: "FT-" + Date.now(),
+                            createdAt: new Date().toISOString(),
+                            ...templateData as any
+                          });
+                        }
+                        
+                        setFormulaTemplates(newTemplates);
+                        localStorage.setItem('formulaTemplates', JSON.stringify(newTemplates));
+                        recordHistory(editingFormulaTemplate ? `Updated formula template ${name}` : `Added formula template ${name}`, takeoffData, catalog, projectName, clientName, customVariables, jobNotes, dynamicColumns, entityData, newTemplates);
+                        
+                        // Reset form
+                        nameInput.value = '';
+                        setFtFormula('');
+                        descInput.value = '';
+                        setFtScope('global');
+                        setEditingFormulaTemplate(null);
+                      }}
+                      className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded transition"
+                    >
                     {editingFormulaTemplate ? 'Update Template' : 'Add Template'}
                   </button>
                 </div>
@@ -5126,8 +5465,10 @@ export default function EstimatorApp() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Value or Formula</label>
+                  <FormulaToolbar onInsert={(text) => insertIntoEditor(cvFormulaRef, text, setCvFormula, cvFormula)} />
                   <div className="border border-amber-200 rounded overflow-hidden focus-within:ring-2 focus-within:ring-amber-200">
                     <CodeMirror
+                      ref={cvFormulaRef}
                       value={cvFormula}
                       onChange={(val) => setCvFormula(val)}
                       extensions={[
@@ -5376,7 +5717,17 @@ export default function EstimatorApp() {
                       >
                         <option value="">-- Select Template --</option>
                         {['global', 'category', 'subcategory', 'itemgroup', 'material'].map(scope => {
-                          const scopedTemplates = formulaTemplates.filter(t => t.scope === scope);
+                          const item = catalog.find(i => i.item_id === qtyPanelItemId);
+                          const scopedTemplates = formulaTemplates.filter(t => {
+                            if (t.scope !== scope) return false;
+                            if (scope === 'global') return true;
+                            if (!item) return false;
+                            if (scope === 'category') return !t.category || t.category === item.category;
+                            if (scope === 'subcategory') return !t.subCategory || t.subCategory === item.sub_category;
+                            if (scope === 'itemgroup') return !t.itemGroup || t.itemGroup === item.sub_item_1;
+                            if (scope === 'material') return !t.materialName || t.materialName === item.item_name;
+                            return true;
+                          });
                           if (scopedTemplates.length === 0) return null;
                           return (
                             <optgroup key={scope} label={scope.charAt(0).toUpperCase() + scope.slice(1)}>
@@ -5390,6 +5741,7 @@ export default function EstimatorApp() {
                     </div>
                   )}
                 </div>
+                <FormulaToolbar onInsert={(text) => insertIntoEditor(formulaInputRef, text, setCustomFormula, customFormula)} />
                 <div className="border border-emerald-400 rounded overflow-hidden focus-within:ring-2 focus-within:ring-emerald-200">
                   <CodeMirror
                     ref={formulaInputRef}
@@ -5662,7 +6014,15 @@ export default function EstimatorApp() {
 
                 <div className="space-y-4">
                   <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
-                    <h4 className="font-bold text-slate-700 mb-3">1. Add Waste/Overage?</h4>
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-bold text-slate-700">1. Add Waste/Overage?</h4>
+                      <div className="group relative">
+                        <Info size={14} className="text-slate-400 cursor-help" />
+                        <div className="absolute right-0 bottom-full mb-2 w-48 p-2 bg-slate-800 text-white text-[10px] rounded shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                          Automatically adds a percentage of extra material to your calculation. Uses the "Overage %" column from your takeoff.
+                        </div>
+                      </div>
+                    </div>
                     <div className="flex gap-4">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input type="radio" name="wizWaste" checked={!wizardWaste} onChange={() => setWizardWaste(false)} className="text-blue-600" />
@@ -5676,7 +6036,15 @@ export default function EstimatorApp() {
                   </div>
 
                   <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
-                    <h4 className="font-bold text-slate-700 mb-3">2. Rounding</h4>
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-bold text-slate-700">2. Rounding</h4>
+                      <div className="group relative">
+                        <Info size={14} className="text-slate-400 cursor-help" />
+                        <div className="absolute right-0 bottom-full mb-2 w-48 p-2 bg-slate-800 text-white text-[10px] rounded shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                          Choose whether to keep the exact decimal result or round up to the nearest whole unit (e.g., full boxes or sheets).
+                        </div>
+                      </div>
+                    </div>
                     <div className="flex flex-col gap-2">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input type="radio" name="wizRound" checked={!wizardRoundUp} onChange={() => setWizardRoundUp(false)} className="text-blue-600" />
@@ -5690,7 +6058,15 @@ export default function EstimatorApp() {
                   </div>
 
                   <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
-                    <h4 className="font-bold text-slate-700 mb-3">3. Minimum Quantity</h4>
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-bold text-slate-700">3. Minimum Quantity</h4>
+                      <div className="group relative">
+                        <Info size={14} className="text-slate-400 cursor-help" />
+                        <div className="absolute right-0 bottom-full mb-2 w-48 p-2 bg-slate-800 text-white text-[10px] rounded shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                          Ensures that the calculated quantity never falls below a certain threshold (e.g., minimum order charge).
+                        </div>
+                      </div>
+                    </div>
                     <div className="flex flex-col gap-3">
                       <div className="flex gap-4">
                         <label className="flex items-center gap-2 cursor-pointer">
@@ -7376,5 +7752,13 @@ export default function EstimatorApp() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+export default function EstimatorApp() {
+  return (
+    <ErrorBoundary>
+      <EstimatorAppContent />
+    </ErrorBoundary>
   );
 }

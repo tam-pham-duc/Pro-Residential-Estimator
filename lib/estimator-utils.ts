@@ -115,7 +115,8 @@ export function evaluateCustomFormula(
     if (!r) throw new Error(`Value not found in table: ${searchVal}`);
     const result = r[resultCol];
     if (result === undefined) throw new Error(`Column not found: ${resultCol}`);
-    return Number(result) || result;
+    const numResult = Number(result);
+    return !isNaN(numResult) && isFinite(numResult) ? numResult : result;
   };
 
   return evaluateFormula(formula, context);

@@ -67,6 +67,29 @@ service cloud.firestore {
     //   - takeoff: map (optional) - Takeoff data map
     //   - variables: list (optional) - Custom variables list
     //
+    // Collection: users/{userId}/dynamicColumns/{columnId}
+    // Fields:
+    //   - id: string (required) - Unique column ID
+    //   - name: string (required) - Column name
+    //   - key: string (required) - Column key
+    //   - dataType: string (required) - 'number', 'text', or 'boolean'
+    //   - scope: string (required) - 'category', 'subcategory', 'itemgroup', 'material', or 'global'
+    //   - unit: string (optional) - Column unit
+    //   - defaultValue: string (optional) - Default value
+    //
+    // Collection: users/{userId}/entityData/{entityId}
+    // Fields:
+    //   - id: string (required) - Entity ID (e.g., 'CAT:CategoryName')
+    //   - values: map (required) - Key-value pairs for dynamic columns
+    //
+    // Collection: users/{userId}/savedJobs/{jobId}
+    // Fields:
+    //   - id: string (required) - Unique job ID
+    //   - projectName: string (required) - Project name
+    //   - clientName: string (optional) - Client name
+    //   - lastSaved: string (required) - ISO 8601 timestamp
+    //   - takeoffData: map (optional) - Takeoff data map
+    //
     // ===============================================================
 
     // ===============================================================
@@ -160,6 +183,31 @@ service cloud.firestore {
              isValidOptionalString('description', 500);
     }
 
+    function isValidDynamicColumn(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.key is string && data.key.size() > 0 && data.key.size() < 100 &&
+             data.dataType in ['number', 'text', 'boolean'] &&
+             data.scope in ['category', 'subcategory', 'itemgroup', 'material', 'global'];
+    }
+
+    function isValidEntityData(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.values is map;
+    }
+
+    function isValidDataTable(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.columns is list && data.rows is list;
+    }
+
+    function isValidJob(data) {
+      return data.id is string && data.id.size() > 0 &&
+             data.projectName is string && data.projectName.size() > 0 && data.projectName.size() < 200 &&
+             data.lastSaved is string;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -193,6 +241,26 @@ service cloud.firestore {
       match /templates/{templateId} {
         allow read: if isOwner(userId) || isAdmin();
         allow write: if isOwner(userId) && isValidTemplate(request.resource.data);
+      }
+
+      match /dynamicColumns/{columnId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidDynamicColumn(request.resource.data);
+      }
+
+      match /entityData/{entityId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidEntityData(request.resource.data);
+      }
+
+      match /dataTables/{tableId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidDataTable(request.resource.data);
+      }
+
+      match /savedJobs/{jobId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isOwner(userId) && isValidJob(request.resource.data);
       }
     }
 

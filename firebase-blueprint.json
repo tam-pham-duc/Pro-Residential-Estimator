@@ -89,6 +89,35 @@
       },
       "required": ["id", "name"]
     },
+    "DynamicColumn": {
+      "title": "Dynamic Column",
+      "description": "A user-defined column for data entry at various scopes.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "key": { "type": "string" },
+        "dataType": { "type": "string", "enum": ["number", "text", "boolean"] },
+        "scope": { "type": "string", "enum": ["category", "subcategory", "itemgroup", "material", "global"] },
+        "unit": { "type": "string" },
+        "defaultValue": { "type": "string" },
+        "category": { "type": "string" },
+        "subCategory": { "type": "string" },
+        "itemGroup": { "type": "string" },
+        "materialName": { "type": "string" }
+      },
+      "required": ["id", "name", "key", "dataType", "scope"]
+    },
+    "EntityData": {
+      "title": "Entity Data",
+      "description": "Values for dynamic columns stored per entity (category, material, etc).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "values": { "type": "object" }
+      },
+      "required": ["id", "values"]
+    },
     "Template": {
       "title": "Template",
       "description": "A saved project template.",
@@ -102,6 +131,24 @@
         "variables": { "type": "array", "items": { "$ref": "CustomVariable" } }
       },
       "required": ["id", "name"]
+    },
+    "Job": {
+      "title": "Job",
+      "description": "A saved estimating job.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "projectName": { "type": "string" },
+        "clientName": { "type": "string" },
+        "lastSaved": { "type": "string", "format": "date-time" },
+        "jobNotes": { "type": "string" },
+        "takeoffData": { "type": "object" },
+        "customVariables": { "type": "array", "items": { "$ref": "CustomVariable" } },
+        "dynamicColumns": { "type": "array", "items": { "$ref": "DynamicColumn" } },
+        "entityData": { "type": "object" },
+        "dataTables": { "type": "array", "items": { "$ref": "DataTable" } }
+      },
+      "required": ["id", "projectName"]
     }
   },
   "firestore": {
@@ -132,6 +179,18 @@
     "/users/{userId}/dataTables/{tableId}": {
       "schema": "DataTable",
       "description": "User's custom data tables."
+    },
+    "/users/{userId}/dynamicColumns/{columnId}": {
+      "schema": "DynamicColumn",
+      "description": "User's custom dynamic columns."
+    },
+    "/users/{userId}/entityData/{entityId}": {
+      "schema": "EntityData",
+      "description": "Values for dynamic columns per entity."
+    },
+    "/users/{userId}/savedJobs/{jobId}": {
+      "schema": "Job",
+      "description": "Saved estimating jobs."
     }
   }
 }

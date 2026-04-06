@@ -56,7 +56,11 @@ export interface FormulaTemplate {
   name: string;
   formula: string;
   description: string;
-  scope: string;
+  scope: 'category' | 'subcategory' | 'itemgroup' | 'material' | 'global';
+  category?: string;
+  subCategory?: string;
+  itemGroup?: string;
+  materialName?: string;
   variables: string[];
   createdAt: string;
 }
