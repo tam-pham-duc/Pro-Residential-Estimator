@@ -487,7 +487,7 @@ function EstimatorAppContent() {
     setExpandedGuideSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
   const [variableMappings, setVariableMappings] = useState<Record<string, string>>({});
-  const [customVarModalOpen, setCustomVarModalOpen] = useState(true);
+  const [customVarModalOpen, setCustomVarModalOpen] = useState(false);
   const [editingCustomVar, setEditingCustomVar] = useState<CustomVariable | null>(null);
   const [formulaHelpSearch, setFormulaHelpSearch] = useState("");
 
@@ -1851,8 +1851,8 @@ function EstimatorAppContent() {
     return { newData, hasChanges, newVars };
   }, [dependencyMap, catalog, defaultOveragePct, dynamicColumns, resolveDynamicScope]);
 
-  const recalculateAffectedItems = useCallback((changedSources: string[]) => {
-    const { newData, hasChanges, newVars } = performRecalculation(changedSources);
+  const recalculateAffectedItems = useCallback((changedSources: string[], currentVars: CustomVariable[] = customVariables, currentEntityData: Record<string, Record<string, any>> = entityData, currentTakeoffData: Record<string, TakeoffItem> = takeoffData, currentDataTables: DataTable[] = dataTables) => {
+    const { newData, hasChanges, newVars } = performRecalculation(changedSources, currentVars, currentEntityData, currentTakeoffData, currentDataTables);
     if (hasChanges) {
       setTakeoffData(newData);
     }
@@ -1860,7 +1860,7 @@ function EstimatorAppContent() {
       setCustomVariables(newVars);
     }
     return { newData, hasChanges, newVars };
-  }, [performRecalculation, customVariables]);
+  }, [performRecalculation, customVariables, entityData, takeoffData, dataTables]);
 
   const handleDefaultOverageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
