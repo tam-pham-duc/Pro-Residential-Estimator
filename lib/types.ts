@@ -1,5 +1,6 @@
 export interface Item {
   item_id: string;
+  building_type: string;
   category: string;
   sub_category: string;
   sub_item_1: string;
@@ -7,6 +8,7 @@ export interface Item {
   uom: string;
   calc_factor_instruction: string;
   notes: string;
+  material_order?: string;
 }
 
 export interface TakeoffItem {

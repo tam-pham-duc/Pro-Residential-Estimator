@@ -6,7 +6,7 @@ import { evaluateMath, evaluateCustomFormula, validateCustomFormula, DEFAULT_QTY
 import { normalizeKey } from '@/services/formulaEngine';
 import { Item, TakeoffItem, HistoryRecord, Job, CustomVariable, ProjectTemplate, DynamicColumn, Client, FormulaTemplate, DataTable, ConditionalFormatRule, FullBackup } from '@/lib/types';
 import { 
-  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings, Variable, FileUp,
+  Home, Plus, Download, Save, Search, History, FileJson, Upload, Table, Columns, Settings, Variable, FileUp, Library,
   ChevronDown, ChevronUp, ChevronRight, Edit2, Calculator, Hand, Trash2, X, Info,
   Undo2, Redo2, Copy, Users, Folder, BookOpen, Palette, LogIn, LogOut, User as UserIcon,
   Key, Check, AlertCircle, Edit, RefreshCw, Database, Shield, FileOutput, FileInput
@@ -3053,12 +3053,16 @@ function EstimatorAppContent() {
     }
   };
 
+  const [modBuildingType, setModBuildingType] = useState("");
+  const [modMaterialOrder, setModMaterialOrder] = useState("");
+
   const openItemModal = (
     mode: 'add' | 'edit', 
     itemId: string | null = null,
     prefillCategory?: string,
     prefillSubCategory?: string,
-    prefillSubItem1?: string
+    prefillSubItem1?: string,
+    prefillBuildingType?: string
   ) => {
     setItemModalMode(mode);
     setIsNewCategory(false);
@@ -3069,6 +3073,7 @@ function EstimatorAppContent() {
       const item = catalog.find(i => i.item_id === itemId);
       if (item) {
         setEditingItemId(item.item_id);
+        setModBuildingType(item.building_type || "Residential");
         setModCategory(item.category);
         setModSubCategory(item.sub_category);
         setModSubItem1(item.sub_item_1 || "General");
@@ -3076,9 +3081,11 @@ function EstimatorAppContent() {
         setModUOM(item.uom);
         setModRule(item.calc_factor_instruction);
         setModNotes(item.notes || "");
+        setModMaterialOrder(item.material_order || "");
       }
     } else {
       setEditingItemId("");
+      setModBuildingType(prefillBuildingType || "Residential");
       setModCategory(prefillCategory || getUniqueVals(catalog, 'category')[0] || "");
       setModSubCategory(prefillSubCategory || "");
       setModSubItem1(prefillSubItem1 || "");
@@ -3086,11 +3093,13 @@ function EstimatorAppContent() {
       setModUOM("");
       setModRule("");
       setModNotes("");
+      setModMaterialOrder("");
     }
     setItemModalOpen(true);
   };
 
   const saveItem = () => {
+    const bType = modBuildingType || "Residential";
     const cat = modCategory.toUpperCase();
     const subCat = modSubCategory;
     const subItem1 = modSubItem1;
@@ -3098,6 +3107,7 @@ function EstimatorAppContent() {
     const uom = modUOM;
     const rule = modRule;
     const notes = modNotes;
+    const order = modMaterialOrder;
 
     if (!cat || !subCat || !subItem1 || !name) {
       alert("Hierarchy and Item Name are required!");
@@ -3110,12 +3120,34 @@ function EstimatorAppContent() {
       const itemIndex = newCatalog.findIndex(i => i.item_id === editingItemId);
       if (itemIndex > -1) {
         const oldName = newCatalog[itemIndex].item_name;
-        newCatalog[itemIndex] = { item_id: editingItemId, category: cat, sub_category: subCat, sub_item_1: subItem1, item_name: name, uom: uom, calc_factor_instruction: rule, notes: notes };
+        newCatalog[itemIndex] = { 
+          item_id: editingItemId, 
+          building_type: bType,
+          category: cat, 
+          sub_category: subCat, 
+          sub_item_1: subItem1, 
+          item_name: name, 
+          uom: uom, 
+          calc_factor_instruction: rule, 
+          notes: notes,
+          material_order: order
+        };
         setTimeout(() => recordHistory(`Advanced Edit: ${oldName} -> ${name}`, takeoffData, newCatalog, projectName, clientName), 0);
       }
     } else {
       finalItemId = "ITM-" + Date.now();
-      const newItem: Item = { item_id: finalItemId, category: cat, sub_category: subCat, sub_item_1: subItem1, item_name: name, uom: uom, calc_factor_instruction: rule, notes: notes };
+      const newItem: Item = { 
+        item_id: finalItemId, 
+        building_type: bType,
+        category: cat, 
+        sub_category: subCat, 
+        sub_item_1: subItem1, 
+        item_name: name, 
+        uom: uom, 
+        calc_factor_instruction: rule, 
+        notes: notes,
+        material_order: order
+      };
       newCatalog.push(newItem);
       setTimeout(() => recordHistory(`Added New Item: ${name}`, takeoffData, newCatalog, projectName, clientName), 0);
     }
@@ -3173,30 +3205,39 @@ function EstimatorAppContent() {
     }
   };
 
+  const [materialLibraryModalOpen, setMaterialLibraryModalOpen] = useState(false);
+  const [selectedBuildingType, setSelectedBuildingType] = useState<string>('All');
+
   const treeData = useMemo(() => {
-    const tree: Record<string, Record<string, Record<string, Item[]>>> = {};
+    const tree: Record<string, Record<string, Record<string, Record<string, Item[]>>>> = {};
     const filtered = catalog.filter(item => {
+      if (selectedBuildingType !== 'All' && item.building_type !== selectedBuildingType) return false;
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
       return item.item_name.toLowerCase().includes(q) ||
              item.category.toLowerCase().includes(q) ||
              item.sub_category.toLowerCase().includes(q) ||
-             (item.sub_item_1 || "general").toLowerCase().includes(q);
+             (item.sub_item_1 || "general").toLowerCase().includes(q) ||
+             (item.building_type || "").toLowerCase().includes(q);
     });
 
     filtered.forEach(item => {
+      const bType = item.building_type || "Residential";
       const cat = item.category || "UNASSIGNED";
       const subCat = item.sub_category || "General";
       const subItem1 = item.sub_item_1 || "General";
 
-      if (!tree[cat]) tree[cat] = {};
-      if (!tree[cat][subCat]) tree[cat][subCat] = {};
-      if (!tree[cat][subCat][subItem1]) tree[cat][subCat][subItem1] = [];
+      if (!tree[bType]) tree[bType] = {};
+      if (!tree[bType][cat]) tree[bType][cat] = {};
+      if (!tree[bType][cat][subCat]) tree[bType][cat][subCat] = {};
+      if (!tree[bType][cat][subCat][subItem1]) tree[bType][cat][subCat][subItem1] = [];
 
-      tree[cat][subCat][subItem1].push(item);
+      tree[bType][cat][subCat][subItem1].push(item);
     });
     return tree;
-  }, [catalog, searchQuery]);
+  }, [catalog, searchQuery, selectedBuildingType]);
+
+  const allBuildingTypes = useMemo(() => ['All', ...getUniqueVals(catalog, 'building_type')], [catalog]);
 
   const allUOMs = useMemo(() => getUniqueVals(catalog, 'uom'), [catalog]);
 
@@ -3420,6 +3461,9 @@ function EstimatorAppContent() {
               <button onClick={() => setCustomVarModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
                 <Variable size={16} /> Variables
               </button>
+              <button onClick={() => setMaterialLibraryModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
+                <Library size={16} /> Material Library
+              </button>
               <button onClick={() => setConditionalFormatModalOpen(true)} className="text-slate-700 bg-slate-200 hover:bg-slate-300 px-3 py-2 rounded font-bold flex items-center gap-1 transition">
                 <Palette size={16} /> Formatting
               </button>
@@ -3506,16 +3550,43 @@ function EstimatorAppContent() {
 
       {/* Main Table */}
       <div className="max-w-[98%] mx-auto px-4 mt-6 overflow-x-auto">
+        <div className="flex items-center gap-4 mb-4">
+          <label className="text-xs font-bold text-slate-500 uppercase">Filter Building Type:</label>
+          <div className="flex flex-wrap gap-2">
+            {allBuildingTypes.map(bt => (
+              <button
+                key={bt}
+                onClick={() => setSelectedBuildingType(bt)}
+                className={`px-3 py-1 rounded-full text-xs font-bold transition-all border ${
+                  selectedBuildingType === bt 
+                    ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' 
+                    : 'bg-white border-slate-300 text-slate-600 hover:border-emerald-400'
+                }`}
+              >
+                {bt}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {Object.keys(treeData).length === 0 ? (
           <div className="text-center py-10 text-slate-500 font-bold bg-white rounded shadow-sm border border-slate-200">
             No items match your search.
           </div>
         ) : (
-          Object.entries(treeData).map(([category, subCategories]) => {
-            const isCatCollapsed = searchQuery ? false : (collapsedState[category] || false);
-            
-            return (
-              <div key={category} className="bg-white rounded-lg shadow-sm border border-slate-300 mb-8 overflow-hidden">
+          Object.entries(treeData).map(([buildingType, categories]) => (
+            <div key={buildingType} className="mb-12">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="h-px bg-slate-300 flex-1"></div>
+                <h2 className="text-xl font-black text-slate-400 uppercase tracking-widest px-4">{buildingType}</h2>
+                <div className="h-px bg-slate-300 flex-1"></div>
+              </div>
+              
+              {Object.entries(categories).map(([category, subCategories]) => {
+                const isCatCollapsed = searchQuery ? false : (collapsedState[category] || false);
+                
+                return (
+                  <div key={category} className="bg-white rounded-lg shadow-sm border border-slate-300 mb-8 overflow-hidden">
                 <div 
                   className="bg-slate-800 px-4 py-3 flex justify-between items-center group cursor-pointer hover:bg-slate-700 transition" 
                   onClick={() => toggleCollapse(category)}
@@ -3903,7 +3974,12 @@ function EstimatorAppContent() {
                                             return 0;
                                           });
                                         }
-                                        return sortedItems.map(item => {
+                                        return sortedItems.sort((a, b) => {
+                                          const orderA = parseInt(a.material_order || '9999') || 9999;
+                                          const orderB = parseInt(b.material_order || '9999') || 9999;
+                                          if (orderA !== orderB) return orderA - orderB;
+                                          return a.item_name.localeCompare(b.item_name);
+                                        }).map(item => {
                                           const rowData = takeoffData[item.item_id] || { in_scope: false, spec: "", qty: "", measured_qty: "", overage_pct: "", order_qty: "", evidence: "", qty_mode: "auto" };
                                         const isChecked = rowData.in_scope;
                                         const isDisabled = !isChecked;
@@ -3950,13 +4026,21 @@ function EstimatorAppContent() {
                                             <td className="px-2 py-1 md:py-2 md:pl-4 flex flex-col md:table-cell border-b md:border-b-0 border-slate-200/50">
                                               <span className="md:hidden text-xs font-bold text-slate-500 uppercase mb-1">Material Name</span>
                                               <div className="flex items-center justify-between w-full">
-                                                <input 
-                                                  type="text" 
-                                                  className={`font-bold text-slate-800 text-[13px] bg-transparent border border-slate-200 md:border-transparent hover:border-slate-300 focus:border-emerald-500 focus:bg-white rounded px-2 md:px-1 py-1 md:py-0 w-full outline-none transition-colors ${cellClasses['item_name'] || ''}`} 
-                                                  defaultValue={item.item_name} 
-                                                  onBlur={(e) => updateItemName(item.item_id, e.target.value)} 
-                                                  onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
-                                                />
+                                                <div className="relative flex-1">
+                                                  <input 
+                                                    type="text" 
+                                                    className={`font-bold text-slate-800 text-[13px] bg-transparent border border-slate-200 md:border-transparent hover:border-slate-300 focus:border-emerald-500 focus:bg-white rounded px-2 md:px-1 py-1 md:py-0 w-full outline-none transition-colors ${cellClasses['item_name'] || ''}`} 
+                                                    defaultValue={item.item_name} 
+                                                    onBlur={(e) => updateItemName(item.item_id, e.target.value)} 
+                                                    onKeyDown={(e) => { if(e.key === 'Enter') e.currentTarget.blur(); }}
+                                                    list={`materials-list-${item.item_id}`}
+                                                  />
+                                                  <datalist id={`materials-list-${item.item_id}`}>
+                                                    {catalog.filter(i => i.category === category && i.sub_category === subCategory).map(i => (
+                                                      <option key={i.item_id} value={i.item_name} />
+                                                    ))}
+                                                  </datalist>
+                                                </div>
                                                 <div className="flex items-center">
                                                   <button onClick={() => duplicateMaterial(item.item_id)} className="text-slate-400 hover:text-emerald-600 px-1" title="Duplicate Material">
                                                     <Copy size={14} />
@@ -4155,16 +4239,118 @@ function EstimatorAppContent() {
                       </div>
                     );
                   })}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
+                </div>
+              ))
+            )}
+          </div>
 
-      {/* Client Management Modal */}
-      {clientModalOpen && (
+      {/* Material Library Modal */}
+      {materialLibraryModalOpen && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[70]">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-5xl h-[90vh] flex flex-col border-t-4 border-emerald-600 overflow-hidden">
+            <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+              <div>
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <Library className="text-emerald-600" /> Construction Material Library
+                </h2>
+                <p className="text-xs text-slate-500 font-medium">Manage your master catalog of construction materials</p>
+              </div>
+              <button onClick={() => setMaterialLibraryModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-hidden flex flex-col p-6">
+              <div className="flex justify-between items-center mb-6 gap-4">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+                  <input 
+                    type="text" 
+                    placeholder="Search library..." 
+                    className="w-full border border-slate-300 rounded-lg pl-10 pr-4 py-2 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 outline-none"
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <button 
+                  onClick={() => openItemModal('add')}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow-sm transition"
+                >
+                  <Plus size={18} /> Add New Material
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto border border-slate-200 rounded-lg">
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-slate-100 sticky top-0 z-10 border-b border-slate-300 text-xs font-bold text-slate-600 uppercase tracking-wider">
+                    <tr>
+                      <th className="px-4 py-3">Order</th>
+                      <th className="px-4 py-3">Building Type</th>
+                      <th className="px-4 py-3">Category</th>
+                      <th className="px-4 py-3">Sub-Category</th>
+                      <th className="px-4 py-3">Group</th>
+                      <th className="px-4 py-3">Material Name</th>
+                      <th className="px-4 py-3">UOM</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 text-sm">
+                    {catalog.sort((a, b) => {
+                      const bt = (a.building_type || "").localeCompare(b.building_type || "");
+                      if (bt !== 0) return bt;
+                      const cat = a.category.localeCompare(b.category);
+                      if (cat !== 0) return cat;
+                      const orderA = parseInt(a.material_order || '9999');
+                      const orderB = parseInt(b.material_order || '9999');
+                      return orderA - orderB;
+                    }).map(item => (
+                      <tr key={item.item_id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-3 font-mono text-xs text-slate-500">{item.material_order || '-'}</td>
+                        <td className="px-4 py-3 font-bold text-slate-700">{item.building_type || 'Residential'}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.category}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.sub_category}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.sub_item_1}</td>
+                        <td className="px-4 py-3 font-bold text-slate-900">{item.item_name}</td>
+                        <td className="px-4 py-3 text-slate-500">{item.uom}</td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex justify-end gap-2">
+                            <button 
+                              onClick={() => openItemModal('edit', item.item_id)}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition"
+                              title="Edit"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setEditingItemId(item.item_id);
+                                deleteItem();
+                              }}
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded transition"
+                              title="Delete"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            <div className="p-4 bg-slate-50 border-t flex justify-between items-center">
+              <p className="text-xs text-slate-500">Total Materials: <span className="font-bold">{catalog.length}</span></p>
+              <button 
+                onClick={() => setMaterialLibraryModalOpen(false)}
+                className="bg-slate-800 hover:bg-slate-700 text-white px-6 py-2 rounded-lg font-bold transition"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
         <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl p-6 border-t-4 border-blue-500">
             <div className="flex justify-between items-center mb-4">
@@ -6385,12 +6571,26 @@ function EstimatorAppContent() {
       {/* Item Config Modal */}
       {itemModalOpen && (
         <div className="fixed inset-0 bg-slate-900 bg-opacity-60 flex justify-center items-center z-50">
-          <div className="bg-white rounded-lg shadow-2xl w-full max-w-xl p-6 border-t-4 border-blue-600">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-xl p-6 border-t-4 border-blue-600 max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold mb-4">{itemModalMode === 'edit' ? 'Advanced Edit Material' : 'Add New Material'}</h2>
             
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-blue-800 mb-1">Category (L1)</label>
+                <label className="block text-xs font-bold text-blue-800 mb-1 uppercase tracking-wider">Building Type</label>
+                <select 
+                  value={modBuildingType} 
+                  onChange={(e) => setModBuildingType(e.target.value)}
+                  className="w-full border p-2 rounded focus:border-blue-500 outline-none font-bold text-slate-700"
+                >
+                  <option value="Residential">Residential</option>
+                  <option value="Multi-family">Multi-family</option>
+                  <option value="Commercial">Commercial</option>
+                  <option value="Industrial">Industrial</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-blue-800 mb-1 uppercase tracking-wider">Category (L1)</label>
                 <div className="flex gap-2">
                   {!isNewCategory ? (
                     <>
@@ -6431,7 +6631,7 @@ function EstimatorAppContent() {
               </div>
               
               <div>
-                <label className="block text-xs font-bold text-blue-800 mb-1">Sub-Category (L2)</label>
+                <label className="block text-xs font-bold text-blue-800 mb-1 uppercase tracking-wider">Sub-Category (L2)</label>
                 <div className="flex gap-2">
                   {!isNewSubCategory ? (
                     <>
@@ -6472,7 +6672,7 @@ function EstimatorAppContent() {
               </div>
               
               <div>
-                <label className="block text-xs font-bold text-emerald-800 mb-1">Sub-Item Group (L3)</label>
+                <label className="block text-xs font-bold text-emerald-800 mb-1 uppercase tracking-wider">Sub-Item Group (L3)</label>
                 <div className="flex gap-2">
                   {!isNewSubItem1 ? (
                     <>
@@ -6511,14 +6711,26 @@ function EstimatorAppContent() {
                 </div>
               </div>
               
-              <div className="pt-4 border-t">
-                <label className="block text-xs font-bold text-slate-800">MATERIAL NAME (L4)</label>
-                <input 
-                  type="text" 
-                  value={modItemName}
-                  onChange={(e) => setModItemName(e.target.value)}
-                  className="w-full border p-2 rounded font-bold focus:border-blue-500 outline-none" 
-                />
+              <div className="pt-4 border-t grid grid-cols-3 gap-4">
+                <div className="col-span-2">
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1">Material Name (L4)</label>
+                  <input 
+                    type="text" 
+                    value={modItemName}
+                    onChange={(e) => setModItemName(e.target.value)}
+                    className="w-full border p-2 rounded font-bold focus:border-blue-500 outline-none" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-1">Material Order</label>
+                  <input 
+                    type="text" 
+                    value={modMaterialOrder}
+                    onChange={(e) => setModMaterialOrder(e.target.value)}
+                    placeholder="e.g. 10"
+                    className="w-full border p-2 rounded font-bold focus:border-blue-500 outline-none" 
+                  />
+                </div>
               </div>
               
               <div className="flex gap-3">
