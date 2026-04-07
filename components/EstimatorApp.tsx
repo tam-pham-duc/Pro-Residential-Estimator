@@ -3234,6 +3234,23 @@ function EstimatorAppContent() {
 
       tree[bType][cat][subCat][subItem1].push(item);
     });
+
+    // Sort each leaf array by material_order
+    Object.keys(tree).forEach(bt => {
+      Object.keys(tree[bt]).forEach(cat => {
+        Object.keys(tree[bt][cat]).forEach(sub => {
+          Object.keys(tree[bt][cat][sub]).forEach(sub1 => {
+            tree[bt][cat][sub][sub1].sort((a, b) => {
+              const orderA = parseInt(a.material_order || "9999");
+              const orderB = parseInt(b.material_order || "9999");
+              if (orderA !== orderB) return orderA - orderB;
+              return a.item_name.localeCompare(b.item_name);
+            });
+          });
+        });
+      });
+    });
+
     return tree;
   }, [catalog, searchQuery, selectedBuildingType]);
 
@@ -4042,6 +4059,33 @@ function EstimatorAppContent() {
                                                   </datalist>
                                                 </div>
                                                 <div className="flex items-center">
+                                                  {item.item_name && !catalog.some(c => c.item_name === item.item_name && c.category === category && c.sub_category === subCategory) && (
+                                                    <button 
+                                                      onClick={() => {
+                                                        const newItem: Item = {
+                                                          item_id: "ITM-" + Date.now(),
+                                                          building_type: buildingType,
+                                                          category: category,
+                                                          sub_category: subCategory,
+                                                          sub_item_1: subItem1,
+                                                          item_name: item.item_name,
+                                                          uom: item.uom || "",
+                                                          calc_factor_instruction: item.calc_factor_instruction || "",
+                                                          notes: item.notes || "",
+                                                          material_order: "10"
+                                                        };
+                                                        const newCatalog = [...catalog, newItem];
+                                                        setCatalog(newCatalog);
+                                                        localStorage.setItem('userItemCatalog', JSON.stringify(newCatalog));
+                                                        syncToFirestore('catalog', newItem.item_id, newItem);
+                                                        alert(`Saved "${item.item_name}" to Library.`);
+                                                      }}
+                                                      className="text-emerald-500 hover:text-emerald-700 px-1" 
+                                                      title="Save to Library"
+                                                    >
+                                                      <Save size={14} />
+                                                    </button>
+                                                  )}
                                                   <button onClick={() => duplicateMaterial(item.item_id)} className="text-slate-400 hover:text-emerald-600 px-1" title="Duplicate Material">
                                                     <Copy size={14} />
                                                   </button>
@@ -4239,10 +4283,15 @@ function EstimatorAppContent() {
                       </div>
                     );
                   })}
-                </div>
-              ))
-            )}
-          </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))
+    )}
+  </div>
 
       {/* Material Library Modal */}
       {materialLibraryModalOpen && (
@@ -4351,6 +4400,8 @@ function EstimatorAppContent() {
           </div>
         </div>
       )}
+      {/* Client Management Modal */}
+      {clientModalOpen && (
         <div className="fixed inset-0 bg-slate-900 bg-opacity-70 flex justify-center items-center z-[60]">
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl p-6 border-t-4 border-blue-500">
             <div className="flex justify-between items-center mb-4">
